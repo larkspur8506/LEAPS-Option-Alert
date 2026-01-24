@@ -1,0 +1,47 @@
+# 环境变量（敏感信息）
+.env
+.env.local
+.env.production
+
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 测试
+test_*.py
+check_*.py
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 文档
+README.md
+docs/
+
+# 其他
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# 不需要包含在镜像中的文件
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml

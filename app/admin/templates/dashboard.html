@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-800">Dashboard</h1>
+        <a href="/admin/logout" class="text-red-600 hover:text-red-800">退出登录</a>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h3 class="text-lg font-semibold text-gray-600 mb-2">期权仓位</h3>
+            <p class="text-4xl font-bold text-blue-600">{{ positions_count }}</p>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h3 class="text-lg font-semibold text-gray-600 mb-2">今日提醒</h3>
+            <p class="text-4xl font-bold text-green-600">{{ today_logs }}</p>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h3 class="text-lg font-semibold text-gray-600 mb-2">市场状态</h3>
+            <p class="text-4xl font-bold {% if market_open %}text-green-600{% else %}text-red-600{% endif %}">
+                {% if market_open %}开盘中{% else %}休市{% endif %}
+            </p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <a href="/admin/positions" class="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition">
+            <h3 class="text-xl font-bold text-gray-800 mb-2">仓位管理</h3>
+            <p class="text-gray-600">管理您的期权仓位</p>
+        </a>
+
+        <a href="/admin/rules" class="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition">
+            <h3 class="text-xl font-bold text-gray-800 mb-2">规则配置</h3>
+            <p class="text-gray-600">配置提醒规则</p>
+        </a>
+
+        <div class="md:col-span-2">
+            <a href="/admin/logs" class="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition block">
+                <h3 class="text-xl font-bold text-gray-800 mb-2">提醒日志</h3>
+                <p class="text-gray-600">查看历史提醒记录</p>
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

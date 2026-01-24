@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}规则配置{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-8">
+        <h1 class="text-3xl font-bold text-gray-800">规则配置</h1>
+        <a href="/admin" class="text-blue-600 hover:text-blue-800">返回 Dashboard</a>
+    </div>
+
+    <form action="/admin/rules" method="post" class="space-y-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">QQQ 跌幅规则</h2>
+            <p class="text-gray-600 mb-4">启用或禁用各项 QQQ 跌幅提醒规则</p>
+
+            <div class="space-y-3">
+                <label class="flex items-center">
+                    <input type="checkbox" name="qqq_rule_a_enabled" {% if config.qqq_rule_a_enabled %}checked{% endif %} class="mr-2">
+                    <span class="text-gray-700"><strong>Rule A:</strong> 昨日收盘 → 当前价 (-2%)</span>
+                </label>
+
+                <label class="flex items-center">
+                    <input type="checkbox" name="qqq_rule_b_enabled" {% if config.qqq_rule_b_enabled %}checked{% endif %} class="mr-2">
+                    <span class="text-gray-700"><strong>Rule B:</strong> 当日最高 → 当前价 (-2%)</span>
+                </label>
+
+                <label class="flex items-center">
+                    <input type="checkbox" name="qqq_rule_c_enabled" {% if config.qqq_rule_c_enabled %}checked{% endif %} class="mr-2">
+                    <span class="text-gray-700"><strong>Rule C:</strong> 2日前Close → 当前价 (累计≥-2%)</span>
+                </label>
+
+                <label class="flex items-center">
+                    <input type="checkbox" name="qqq_rule_d_enabled" {% if config.qqq_rule_d_enabled %}checked{% endif %} class="mr-2">
+                    <span class="text-gray-700"><strong>Rule D:</strong> 3日滚动高点 → 当前价 (-2%)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">期权规则</h2>
+            <p class="text-gray-600 mb-4">配置期权止盈止损和时间风险提醒规则</p>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">最大持仓天数</label>
+                    <input type="number" name="max_holding_days" value="{{ config.max_holding_days }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">止盈阶段1阈值 (%)</label>
+                    <input type="number" step="0.01" name="take_profit_phase1_threshold" value="{{ config.take_profit_phase1_threshold }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                    <p class="text-xs text-gray-500 mt-1">前 {{ config.take_profit_phase1_days }} 天</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">止盈阶段2阈值 (%)</label>
+                    <input type="number" step="0.01" name="take_profit_phase2_threshold" value="{{ config.take_profit_phase2_threshold }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                    <p class="text-xs text-gray-500 mt-1">{{ config.take_profit_phase1_days }}-{{ config.take_profit_phase2_days }} 天</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">止盈阶段3阈值 (%)</label>
+                    <input type="number" step="0.01" name="take_profit_phase3_threshold" value="{{ config.take_profit_phase3_threshold }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                    <p class="text-xs text-gray-500 mt-1">{{ config.take_profit_phase2_days }} 天后</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">止损阈值 (%)</label>
+                    <input type="number" step="0.01" name="stop_loss_threshold" value="{{ config.stop_loss_threshold }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                    <p class="text-xs text-gray-500 mt-1">例如 0.30 表示 -30%</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">DTE 警告天数</label>
+                    <input type="number" name="dte_warning_days" value="{{ config.dte_warning_days }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                    <p class="text-xs text-gray-500 mt-1">剩余天数低于此值时提醒</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex justify-end">
+            <button type="submit" class="bg-blue-600 text-white py-2 px-6 rounded-md hover:bg-blue-700 transition">
+                保存配置
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}
