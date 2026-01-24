@@ -56,6 +56,9 @@ class OptionPosition(Base):
     quantity = Column(Integer, nullable=True)
     entry_date = Column(Date, nullable=False)
 
+    current_price = Column(Float, nullable=True)
+    last_price_update = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

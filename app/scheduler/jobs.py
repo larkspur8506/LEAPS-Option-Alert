@@ -3,7 +3,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime
 import logging
 
-from .trading_hours import is_trading_time
+from .trading_hours import is_trading_time, get_current_time_et
 from app.market.polygon_client import CachedPolygonClient
 from app.market.data_fetcher import DataFetcher
 from app.alerts import qqq_rules, option_rules, dedup
@@ -46,17 +46,31 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
     positions = db.query(OptionPosition).all()
 
     for position in positions:
-        current_price = data_fetcher.get_option_current_price(position)
-        option_alerts = option_rules.check_all_option_rules(position, current_price, config)
+        try:
+            current_price = data_fetcher.get_option_current_price(position)
 
-        for alert in option_alerts:
-            position_ticker = option_rules.format_position_ticker(position)
-            rule_name = alert["rule_name"]
+            if current_price is None:
+                logger.warning(f"Failed to get price for position {position.id}, skipping")
+                continue
 
-            if dedup.should_alert(rule_name, position.id):
-                success = notifier.send_option_alert(alert, position_ticker)
-                alert["position_id"] = position.id
-                _log_alert(db, alert, success)
+            position.current_price = current_price
+            position.last_price_update = get_current_time_et()
+            db.commit()
+
+            option_alerts = option_rules.check_all_option_rules(position, current_price, config)
+
+            for alert in option_alerts:
+                position_ticker = option_rules.format_position_ticker(position)
+                rule_name = alert["rule_name"]
+
+                if dedup.should_alert(rule_name, position.id):
+                    success = notifier.send_option_alert(alert, position_ticker)
+                    alert["position_id"] = position.id
+                    _log_alert(db, alert, success)
+
+        except Exception as e:
+            logger.error(f"Error processing position {position.id}: {e}")
+            continue
 
     logger.info("Checks completed")
 

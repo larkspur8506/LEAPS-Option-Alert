@@ -60,17 +60,21 @@ def check_take_profit(position, current_price: float, config) -> Optional[Dict]:
             rule_name = "Take Profit Phase 3"
             threshold_pct = phase3_threshold
 
+    qty = position.quantity or 1
+    profit_amount = (current_price - entry_price) * qty
+
     if rule_name:
         return {
             "alert_type": "OPTION_TAKE_PROFIT",
             "rule_name": rule_name,
-            "message": f"止盈提醒: 已盈利 +{profit_pct*100:.1f}% ({rule_name})",
+            "message": f"止盈提醒: 已盈利 +{profit_pct*100:.1f}% (+${profit_amount:.2f}) ({rule_name})",
             "trigger_condition": f"当前盈利 +{profit_pct*100:.1f}% >= 阈值 +{threshold_pct*100:.1f}%",
             "severity": "MEDIUM",
             "position_id": position.id,
             "current_price": current_price,
             "entry_price": entry_price,
             "profit_pct": profit_pct * 100,
+            "profit_amount": profit_amount,
             "threshold_pct": threshold_pct * 100,
             "days_held": days_held,
             "timestamp": datetime.now(et_tz)
@@ -88,17 +92,21 @@ def check_stop_loss(position, current_price: float, config) -> Optional[Dict]:
 
     stop_loss_threshold = -config.get_stop_loss_threshold()
 
+    qty = position.quantity or 1
+    loss_amount = (current_price - entry_price) * qty
+
     if loss_pct <= stop_loss_threshold:
         return {
             "alert_type": "OPTION_STOP_LOSS",
             "rule_name": "Stop Loss",
-            "message": f"止损提醒: 已亏损 {loss_pct*100:.1f}%",
+            "message": f"止损提醒: 已亏损 {loss_pct*100:.1f}% (${loss_amount:.2f})",
             "trigger_condition": f"当前亏损率 {loss_pct*100:.1f}% <= 止损阈值 {stop_loss_threshold*100:.1f}%",
             "severity": "HIGH",
             "position_id": position.id,
             "current_price": current_price,
             "entry_price": entry_price,
             "loss_pct": loss_pct * 100,
+            "loss_amount": loss_amount,
             "threshold_pct": stop_loss_threshold * 100,
             "timestamp": datetime.now(et_tz)
         }

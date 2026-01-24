@@ -145,11 +145,65 @@ class CachedPolygonClient:
                 price = aggs[0].close
                 self.option_cache[cache_key] = {"price": price}
                 self.option_cache_time[cache_key] = datetime.now(et_tz)
+                logger.info(f"[OK] Polygon got option price: {ticker} = ${price:.2f}")
                 return price
+            else:
+                logger.warning(f"[WARN] Polygon no data for option: {ticker}")
         except Exception as e:
-            print(f"Error getting option price for {ticker}: {e}")
+            logger.error(f"[ERROR] Polygon failed to get option price {ticker}: {e}")
 
         return None
+
+    def get_option_historical(self, ticker: str, days: int = 5) -> list:
+        """
+        获取期权历史数据（End-of-Day）
+
+        免费版可用！获取期权的日线历史数据。
+
+        参数:
+            ticker: 期权代码，如 O:QQQ260126C00620000（正确格式）
+            days: 获取天数
+
+        返回:
+            list: 历史数据列表，每条包含 date, open, high, low, close
+        """
+        cache_key = f"opt_hist_{ticker}_{days}"
+        # 使用较长的缓存时间（4小时 = 240分钟）
+        if self._is_option_cache_valid(cache_key, ttl_minutes=240):
+            return self.option_cache.get(cache_key, [])
+
+        self.rate_limiter.wait_if_needed()
+        try:
+            end_date = datetime.now(et_tz).strftime("%Y-%m-%d")
+            start_date = (datetime.now(et_tz) - timedelta(days=days * 2)).strftime("%Y-%m-%d")
+
+            # 获取期权的日线聚合数据
+            aggs = self.client.get_aggs(ticker, 1, "day", start_date, end_date, limit=days)
+
+            result = []
+            for agg in aggs:
+                result.append({
+                    "date": datetime.fromtimestamp(agg.timestamp / 1000, et_tz).date(),
+                    "open": agg.open,
+                    "high": agg.high,
+                    "low": agg.low,
+                    "close": agg.close
+                })
+
+            # 按日期排序（从早到晚）
+            result.sort(key=lambda x: x["date"])
+
+            # 缓存结果
+            self.option_cache[cache_key] = result
+            self.option_cache_time[cache_key] = datetime.now(et_tz)
+
+            print(f"[INFO] 获取期权历史数据成功: {ticker}, {len(result)} 条记录")
+            return result
+
+        except Exception as e:
+            print(f"Error getting option historical for {ticker}: {e}")
+
+        return []
 
     def clear_cache(self):
         self.qqq_cache.clear()

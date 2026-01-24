@@ -95,6 +95,53 @@ async def health():
     return {"status": "healthy", "market_open": is_market_open_now()}
 
 
+@app.get("/health/detailed")
+async def health_detailed(db: Session = Depends(get_db)):
+    """
+    Detailed health check - checks all critical components
+    """
+    results = {
+        "status": "healthy",
+        "components": {}
+    }
+
+    # Check database
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+        results["components"]["database"] = {"status": "ok"}
+    except Exception as e:
+        results["components"]["database"] = {"status": "error", "message": str(e)}
+        results["status"] = "degraded"
+
+    # Check scheduler
+    from app.scheduler.jobs import scheduler
+    results["components"]["scheduler"] = {
+        "status": "running" if scheduler.running else "stopped"
+    }
+
+    # Check market data sources
+    if data_fetcher:
+        try:
+            qqq_data = data_fetcher.get_qqq_data()
+            results["components"]["qqq_data"] = {
+                "status": "ok" if qqq_data.get("last_price") else "no_data"
+            }
+        except Exception as e:
+            results["components"]["qqq_data"] = {"status": "error", "message": str(e)}
+            results["status"] = "degraded"
+
+    # Count positions
+    try:
+        from app.database.models import OptionPosition
+        count = db.query(OptionPosition).count()
+        results["components"]["positions"] = {"status": "ok", "count": count}
+    except Exception as e:
+        results["components"]["positions"] = {"status": "error", "message": str(e)}
+
+    return results
+
+
 @app.get("/setup", response_class=HTMLResponse)
 async def setup_page(request: Request, db: Session = Depends(get_db)):
     if not is_first_time_setup(db):
@@ -213,20 +260,37 @@ async def add_position(
     if not verify_admin_cookie(request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    position = OptionPosition(
-        underlying=underlying,
-        option_type=option_type,
-        strike_price=strike_price,
-        expiration_date=date.fromisoformat(expiration_date),
-        entry_price=entry_price,
-        quantity=quantity,
-        entry_date=date.fromisoformat(entry_date)
-    )
+    try:
+        # 验证并格式化到期日
+        exp_date_obj = date.fromisoformat(expiration_date)
+        # 转换为 Yahoo Finance 格式 (YYMMDD)
+        yahoo_exp_date = exp_date_obj.strftime("%y%m%d")
+        
+        # 验证期权代码格式
+        # Yahoo Finance 标准格式: {Underlying}{YYMMDD}{C/P}{Strike * 1000 (8位)}
+        strike_str = f"{int(strike_price * 1000):08d}"
+        yahoo_ticker = f"{underlying}{yahoo_exp_date}{option_type[0].upper()}{strike_str}"
+        
+        print(f"期权代码: {yahoo_ticker}")
 
-    db.add(position)
-    db.commit()
+        position = OptionPosition(
+            underlying=underlying.upper(),
+            option_type=option_type.upper(),
+            strike_price=strike_price,
+            expiration_date=exp_date_obj,
+            entry_price=entry_price,
+            quantity=quantity,
+            entry_date=date.fromisoformat(entry_date)
+        )
 
-    return RedirectResponse(url="/admin/positions", status_code=303)
+        db.add(position)
+        db.commit()
+
+        return RedirectResponse(url="/admin/positions", status_code=303)
+        
+    except Exception as e:
+        print(f"添加期权错误: {e}")
+        return RedirectResponse(url="/admin/positions", status_code=303)
 
 
 @app.post("/admin/positions/{position_id}/delete")
@@ -244,6 +308,46 @@ async def delete_position(
         db.commit()
 
     return RedirectResponse(url="/admin/positions", status_code=303)
+
+
+@app.post("/admin/positions/{position_id}/refresh")
+async def refresh_position_price(
+    position_id: int,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    if not verify_admin_cookie(request):
+        return {"success": False, "error": "Unauthorized"}
+
+    position = db.query(OptionPosition).filter(OptionPosition.id == position_id).first()
+    if not position:
+        return {"success": False, "error": "Position not found"}
+
+    if not data_fetcher:
+        return {"success": False, "error": "Data fetcher not initialized"}
+
+    try:
+        current_price = data_fetcher.get_option_current_price(position)
+
+        if current_price is not None:
+            from datetime import datetime
+            position.current_price = current_price
+            position.last_price_update = get_current_time_et()
+            db.commit()
+
+            pnl_amount = (current_price - position.entry_price) * (position.quantity or 1)
+            pnl_pct = ((current_price - position.entry_price) / position.entry_price * 100) if position.entry_price > 0 else 0
+
+            return {
+                "success": True,
+                "current_price": current_price,
+                "pnl_amount": pnl_amount,
+                "pnl_pct": pnl_pct
+            }
+        else:
+            return {"success": False, "error": "Failed to fetch price"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @app.get("/admin/rules", response_class=HTMLResponse)
