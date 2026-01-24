@@ -61,7 +61,7 @@ def check_take_profit(position, current_price: float, config) -> Optional[Dict]:
             threshold_pct = phase3_threshold
 
     qty = position.quantity or 1
-    profit_amount = (current_price - entry_price) * qty
+    profit_amount = (current_price - entry_price) * qty * 100
 
     if rule_name:
         return {
@@ -93,7 +93,7 @@ def check_stop_loss(position, current_price: float, config) -> Optional[Dict]:
     stop_loss_threshold = -config.get_stop_loss_threshold()
 
     qty = position.quantity or 1
-    loss_amount = (current_price - entry_price) * qty
+    loss_amount = (current_price - entry_price) * qty * 100
 
     if loss_pct <= stop_loss_threshold:
         return {

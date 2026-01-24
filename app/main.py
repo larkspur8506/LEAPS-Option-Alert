@@ -335,7 +335,7 @@ async def refresh_position_price(
             position.last_price_update = get_current_time_et()
             db.commit()
 
-            pnl_amount = (current_price - position.entry_price) * (position.quantity or 1)
+            pnl_amount = (current_price - position.entry_price) * (position.quantity or 1) * 100
             pnl_pct = ((current_price - position.entry_price) / position.entry_price * 100) if position.entry_price > 0 else 0
 
             return {
