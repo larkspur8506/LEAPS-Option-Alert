@@ -5,6 +5,7 @@ import logging
 import time
 
 from app.database.models import DailyQQQData, AlertLog, OptionPosition
+from sqlalchemy.exc import IntegrityError
 from app.market.polygon_client import CachedPolygonClient
 from app.market.yfinance_client import YFinanceClient
 
@@ -89,15 +90,33 @@ class DataFetcher:
 
         # 存储到数据库
         if result.get("last_price"):
-            daily_data = DailyQQQData(
-                date=result["date"],
-                close_price=result["last_price"],
-                high_price=result.get("intraday_high"),
-                fetched_at=datetime.now(et_tz)
-            )
-            self.db.add(daily_data)
+            # 检查是否已存在当日数据
+            existing_data = self.db.query(DailyQQQData).filter_by(date=result["date"]).first()
+            if existing_data:
+                logger.info(f"QQQ data for {result['date']} already exists. Skipping insertion.")
+                # 可选：更新现有数据，如果需要
+                existing_data.close_price = result["last_price"]
+                existing_data.high_price = result.get("intraday_high")
+                existing_data.fetched_at = datetime.now(et_tz)
+            else:
+                daily_data = DailyQQQData(
+                    date=result["date"],
+                    close_price=result["last_price"],
+                    high_price=result.get("intraday_high"),
+                    fetched_at=datetime.now(et_tz)
+                )
+                self.db.add(daily_data)
 
-        self.db.commit()
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            logger.warning(f"Duplicate QQQ data for {result['date']} attempted, rolled back transaction.")
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Error committing QQQ data for {result['date']}: {e}")
+            raise
+
 
         return result
 
