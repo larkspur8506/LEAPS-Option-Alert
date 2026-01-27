@@ -22,6 +22,15 @@ class WeChatNotifier:
         drop_pct = alert.get("drop_percent", 0)
         current_price = alert.get("trigger_price", alert.get("current_price", 0))
         
+        # VIX 指数信息
+        vix_index = alert.get("vix_index")
+        vix_status = alert.get("vix_status", "未知")
+        
+        if vix_index is not None:
+            vix_display = f"VIX指数: {vix_index:.2f} ({vix_status})"
+        else:
+            vix_display = f"VIX指数: 未知 ({vix_status})"
+        
         return f"""【QQQ 跌幅提醒】
 
 规则: {alert.get('rule_name')} - {alert.get('message', '')}
@@ -31,6 +40,8 @@ class WeChatNotifier:
 当前价: ${current_price:.2f}
 
 跌幅: {drop_pct:.2f}%
+
+{vix_display}
 
 时间: {time_str}"""
 

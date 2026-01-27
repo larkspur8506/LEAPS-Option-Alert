@@ -354,3 +354,27 @@ class DataFetcher:
 
     def clear_cache(self):
         self.polygon.clear_cache()
+
+    @retry_on_failure(max_retries=2, delay=1.0)
+    def get_vix_index(self) -> Optional[float]:
+        """
+        获取 VIX 波动率指数的最新价格
+        
+        Returns:
+            Optional[float]: VIX 指数值，获取失败时返回 None
+        """
+        try:
+            vix_ticker = yf.Ticker("^VIX")
+            vix_data = vix_ticker.history(period="1d")
+            
+            if vix_data is not None and not vix_data.empty:
+                vix_value = float(vix_data["Close"].iloc[-1])
+                logger.info(f"[OK] Successfully fetched VIX index: {vix_value:.2f}")
+                return vix_value
+            else:
+                logger.warning("[WARN] yfinance returned empty VIX data")
+                return None
+                
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to fetch VIX index: {e}")
+            return None
