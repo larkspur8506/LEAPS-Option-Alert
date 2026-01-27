@@ -183,8 +183,8 @@ class DataFetcher:
             else:
                 prev_close = last_price
                 
-            if total_len >= 4:
-                three_day_prev_close = float(df["Close"].iloc[-4])
+            if total_len >= 3:
+                three_day_prev_close = float(df["Close"].iloc[-3])
             else:
                 three_day_prev_close = float(df["Close"].iloc[0])
 

@@ -2,6 +2,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime
 import logging
+import time
 
 from .trading_hours import is_trading_time, get_current_time_et
 from app.market.polygon_client import CachedPolygonClient
@@ -63,32 +64,39 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
 
     for position in positions:
         try:
+            position_ticker = option_rules.format_position_ticker(position)
+            logger.info(f"Checking position: {position_ticker} (ID: {position.id})")
+
             # 获取期权当前价格
             current_price = data_fetcher.get_option_current_price(position)
 
             if current_price is None:
-                logger.warning(f"Failed to get price for position {position.id}, skipping")
+                logger.warning(f"Failed to get price for position {position_ticker}, skipping")
                 continue
 
-            # 更新当前价格
+            # 1. 立即更新并提交当前价格，确保数据一致性
             position.current_price = current_price
             position.last_price_update = get_current_time_et()
+            db.commit()
+            logger.debug(f"Updated price for {position_ticker} to ${current_price:.2f}")
             
-            # 4. 检查出场/风控信号 (Task 3 Logic)
+            # 2. 检查出场/风控信号
             # check_position_signals 返回 {'alerts':List, 'new_max_profit':float}
             result = option_rules.check_position_signals(position, current_price, qqq_data, config)
             
-            # 更新 max_profit
+            # 3. 更新 max_profit
             new_max_profit = result.get("new_max_profit", 0.0)
-            if new_max_profit > getattr(position, "max_profit", 0.0):
+            if new_max_profit > (position.max_profit or 0.0):
+                logger.info(f"Updating max_profit for {position_ticker}: {position.max_profit} -> {new_max_profit}")
                 position.max_profit = new_max_profit
+                db.commit()
             
-            db.commit()
-
-            # 处理报警
+            # 4. 处理报警
             option_alerts = result.get("alerts", [])
+            if option_alerts:
+                logger.info(f"Found {len(option_alerts)} alerts for {position_ticker}")
+                
             for alert in option_alerts:
-                position_ticker = option_rules.format_position_ticker(position)
                 rule_name = alert["rule_name"]
 
                 # 针对每个 position 去重
@@ -96,9 +104,14 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
                     success = notifier.send_option_alert(alert, position_ticker)
                     alert["position_id"] = position.id
                     _log_alert(db, alert, success)
+                    logger.info(f"Alert sent for {position_ticker}: {rule_name}")
+
+            # 5. 性能优化：API 频率限制，避免对 Yahoo/Polygon 造成压力
+            time.sleep(1.0)
 
         except Exception as e:
-            logger.error(f"Error processing position {position.id}: {e}")
+            logger.error(f"Error processing position {position.id}: {str(e)}", exc_info=True)
+            db.rollback()
             continue
 
     logger.info("Checks completed")
