@@ -53,11 +53,6 @@ async def startup_event():
         config_dict = {
             "polygon_api_key": config_db.polygon_api_key,
             "wechat_webhook_url": config_db.wechat_webhook_url,
-            # Legacy rules
-            "qqq_rule_a_enabled": config_db.qqq_rule_a_enabled,
-            "qqq_rule_b_enabled": config_db.qqq_rule_b_enabled,
-            "qqq_rule_c_enabled": config_db.qqq_rule_c_enabled,
-            "qqq_rule_d_enabled": config_db.qqq_rule_d_enabled,
             # New entry rules
             "entry_level1_enabled": getattr(config_db, 'entry_level1_enabled', True),
             "entry_level2_enabled": getattr(config_db, 'entry_level2_enabled', True),
@@ -78,7 +73,6 @@ async def startup_event():
             "take_profit_phase2_days": config_db.take_profit_phase2_days,
             "take_profit_phase3_threshold": config_db.take_profit_phase3_threshold,
             "stop_loss_threshold": config_db.stop_loss_threshold,
-            "dte_warning_days": config_db.dte_warning_days,
             "alert_log_retention_days": config_db.alert_log_retention_days,
             "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
         }
@@ -381,11 +375,6 @@ async def rules(request: Request, db: Session = Depends(get_db)):
 @app.post("/admin/rules")
 async def update_rules(
     request: Request,
-    # Legacy rules
-    qqq_rule_a_enabled: bool = Form(False),
-    qqq_rule_b_enabled: bool = Form(False),
-    qqq_rule_c_enabled: bool = Form(False),
-    qqq_rule_d_enabled: bool = Form(False),
     # New entry rules
     entry_level1_enabled: bool = Form(False),
     entry_level2_enabled: bool = Form(False),
@@ -401,7 +390,6 @@ async def update_rules(
     # Parameters
     max_holding_days: int = Form(270),
     stop_loss_threshold: float = Form(0.30),
-    dte_warning_days: int = Form(45),
     db: Session = Depends(get_db)
 ):
     if not verify_admin_cookie(request):
@@ -409,12 +397,6 @@ async def update_rules(
 
     config_db = db.query(Configuration).first()
 
-    # Legacy rules
-    config_db.qqq_rule_a_enabled = qqq_rule_a_enabled
-    config_db.qqq_rule_b_enabled = qqq_rule_b_enabled
-    config_db.qqq_rule_c_enabled = qqq_rule_c_enabled
-    config_db.qqq_rule_d_enabled = qqq_rule_d_enabled
-    
     # New entry rules
     config_db.entry_level1_enabled = entry_level1_enabled
     config_db.entry_level2_enabled = entry_level2_enabled
@@ -432,7 +414,7 @@ async def update_rules(
     # Parameters
     config_db.max_holding_days = max_holding_days
     config_db.stop_loss_threshold = stop_loss_threshold
-    config_db.dte_warning_days = dte_warning_days
+
 
     db.commit()
 

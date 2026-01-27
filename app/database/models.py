@@ -16,12 +16,6 @@ class Configuration(Base):
     polygon_api_key = Column(String, nullable=True)
     wechat_webhook_url = Column(String, nullable=True)
 
-    # Legacy QQQ rules (deprecated but kept for compatibility)
-    qqq_rule_a_enabled = Column(Boolean, default=False)
-    qqq_rule_b_enabled = Column(Boolean, default=False)
-    qqq_rule_c_enabled = Column(Boolean, default=False)
-    qqq_rule_d_enabled = Column(Boolean, default=False)
-
     # 新版 QQQ 入场规则 (Level 1/2/3)
     entry_level1_enabled = Column(Boolean, default=True)  # 日常回调
     entry_level2_enabled = Column(Boolean, default=True)  # 黄金坑
@@ -45,7 +39,7 @@ class Configuration(Base):
     take_profit_phase3_threshold = Column(Float, default=0.10)
 
     stop_loss_threshold = Column(Float, default=0.30)
-    dte_warning_days = Column(Integer, default=45)
+
 
     alert_log_retention_days = Column(Integer, default=90)
     daily_qqq_data_retention_days = Column(Integer, default=30)

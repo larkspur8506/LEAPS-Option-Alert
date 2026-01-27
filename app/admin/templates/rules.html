@@ -17,17 +17,20 @@
 
             <div class="space-y-3">
                 <label class="flex items-center">
-                    <input type="checkbox" name="entry_level1_enabled" {% if config.entry_level1_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="entry_level1_enabled" {% if config.entry_level1_enabled %}checked{%
+                        endif %} class="mr-2">
                     <span class="text-gray-700"><strong>Level 1 (日常回调):</strong> 跌幅 ≥ 1.2% 且触碰 MA20</span>
                 </label>
 
                 <label class="flex items-center">
-                    <input type="checkbox" name="entry_level2_enabled" {% if config.entry_level2_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="entry_level2_enabled" {% if config.entry_level2_enabled %}checked{%
+                        endif %} class="mr-2">
                     <span class="text-gray-700"><strong>Level 2 (黄金坑):</strong> 3日累计跌幅 ≥ 3.5% 且 RSI &lt; 32</span>
                 </label>
 
                 <label class="flex items-center">
-                    <input type="checkbox" name="entry_level3_enabled" {% if config.entry_level3_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="entry_level3_enabled" {% if config.entry_level3_enabled %}checked{%
+                        endif %} class="mr-2">
                     <span class="text-gray-700"><strong>Level 3 (极端超卖):</strong> 价格跌破布林下轨</span>
                 </label>
             </div>
@@ -40,22 +43,26 @@
 
             <div class="space-y-3">
                 <label class="flex items-center">
-                    <input type="checkbox" name="exit_hard_tp_enabled" {% if config.exit_hard_tp_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="exit_hard_tp_enabled" {% if config.exit_hard_tp_enabled %}checked{%
+                        endif %} class="mr-2">
                     <span class="text-gray-700"><strong>🎯 硬性止盈:</strong> 盈利达到 50%</span>
                 </label>
 
                 <label class="flex items-center">
-                    <input type="checkbox" name="exit_fast_tp_enabled" {% if config.exit_fast_tp_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="exit_fast_tp_enabled" {% if config.exit_fast_tp_enabled %}checked{%
+                        endif %} class="mr-2">
                     <span class="text-gray-700"><strong>🚀 极速止盈:</strong> 持仓 ≤ 7天且盈利达到 15%</span>
                 </label>
 
                 <label class="flex items-center">
-                    <input type="checkbox" name="exit_trailing_tp_enabled" {% if config.exit_trailing_tp_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="exit_trailing_tp_enabled" {% if config.exit_trailing_tp_enabled
+                        %}checked{% endif %} class="mr-2">
                     <span class="text-gray-700"><strong>📉 移动止盈:</strong> 最高收益 &gt; 30% 后回撤超过 10%</span>
                 </label>
 
                 <label class="flex items-center">
-                    <input type="checkbox" name="exit_tech_tp_enabled" {% if config.exit_tech_tp_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="exit_tech_tp_enabled" {% if config.exit_tech_tp_enabled %}checked{%
+                        endif %} class="mr-2">
                     <span class="text-gray-700"><strong>⚠️ 技术止盈:</strong> QQQ RSI &gt; 75 或突破布林上轨</span>
                 </label>
             </div>
@@ -68,17 +75,20 @@
 
             <div class="space-y-3">
                 <label class="flex items-center">
-                    <input type="checkbox" name="exit_dte_warning_enabled" {% if config.exit_dte_warning_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="exit_dte_warning_enabled" {% if config.exit_dte_warning_enabled
+                        %}checked{% endif %} class="mr-2">
                     <span class="text-gray-700"><strong>⏳ 移仓窗口:</strong> DTE &lt; 120 天提醒</span>
                 </label>
 
                 <label class="flex items-center">
-                    <input type="checkbox" name="exit_dte_force_enabled" {% if config.exit_dte_force_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="exit_dte_force_enabled" {% if config.exit_dte_force_enabled %}checked{%
+                        endif %} class="mr-2">
                     <span class="text-gray-700"><strong>⛔ 强制清仓:</strong> DTE &lt; 90 天提醒</span>
                 </label>
 
                 <label class="flex items-center">
-                    <input type="checkbox" name="exit_trend_stop_enabled" {% if config.exit_trend_stop_enabled %}checked{% endif %} class="mr-2">
+                    <input type="checkbox" name="exit_trend_stop_enabled" {% if config.exit_trend_stop_enabled
+                        %}checked{% endif %} class="mr-2">
                     <span class="text-gray-700"><strong>🛑 趋势崩坏:</strong> QQQ 有效跌破 MA200</span>
                 </label>
             </div>
@@ -92,56 +102,24 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">最大持仓天数</label>
-                    <input type="number" name="max_holding_days" value="{{ config.max_holding_days }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                    <input type="number" name="max_holding_days" value="{{ config.max_holding_days }}" required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-md">
                 </div>
 
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">止损阈值 (%)</label>
-                    <input type="number" step="0.01" name="stop_loss_threshold" value="{{ config.stop_loss_threshold }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
+                    <input type="number" step="0.01" name="stop_loss_threshold" value="{{ config.stop_loss_threshold }}"
+                        required class="w-full px-4 py-2 border border-gray-300 rounded-md">
                     <p class="text-xs text-gray-500 mt-1">例如 0.30 表示 -30%</p>
                 </div>
 
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">DTE 警告天数 (Legacy)</label>
-                    <input type="number" name="dte_warning_days" value="{{ config.dte_warning_days }}" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
-                    <p class="text-xs text-gray-500 mt-1">用于旧版规则兼容</p>
+                <div class="flex justify-end">
+                    <button type="submit"
+                        class="bg-blue-600 text-white py-2 px-6 rounded-md hover:bg-blue-700 transition">
+                        保存配置
+                    </button>
                 </div>
-            </div>
-        </div>
 
-        <!-- 旧版规则 (折叠) -->
-        <details class="bg-gray-100 rounded-lg shadow-md p-6">
-            <summary class="cursor-pointer text-lg font-bold text-gray-600">📦 旧版规则 (Legacy)</summary>
-            <div class="mt-4 space-y-3">
-                <p class="text-gray-500 text-sm mb-4">以下规则已被新版分级规则替代，默认关闭。如需使用请手动开启。</p>
-                
-                <label class="flex items-center">
-                    <input type="checkbox" name="qqq_rule_a_enabled" {% if config.qqq_rule_a_enabled %}checked{% endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>Rule A:</strong> 昨日收盘 → 当前价 (-2%)</span>
-                </label>
-
-                <label class="flex items-center">
-                    <input type="checkbox" name="qqq_rule_b_enabled" {% if config.qqq_rule_b_enabled %}checked{% endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>Rule B:</strong> 当日最高 → 当前价 (-2%)</span>
-                </label>
-
-                <label class="flex items-center">
-                    <input type="checkbox" name="qqq_rule_c_enabled" {% if config.qqq_rule_c_enabled %}checked{% endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>Rule C:</strong> 2日前Close → 当前价 (累计≥-2%)</span>
-                </label>
-
-                <label class="flex items-center">
-                    <input type="checkbox" name="qqq_rule_d_enabled" {% if config.qqq_rule_d_enabled %}checked{% endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>Rule D:</strong> 3日滚动高点 → 当前价 (-2%)</span>
-                </label>
-            </div>
-        </details>
-
-        <div class="flex justify-end">
-            <button type="submit" class="bg-blue-600 text-white py-2 px-6 rounded-md hover:bg-blue-700 transition">
-                保存配置
-            </button>
-        </div>
     </form>
 </div>
 {% endblock %}

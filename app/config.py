@@ -19,26 +19,6 @@ class Config:
             return self._db_config["wechat_webhook_url"]
         return os.getenv("WECHAT_WEBHOOK_URL", "")
 
-    def is_qqq_rule_a_enabled(self) -> bool:
-        if self._db_config.get("qqq_rule_a_enabled") is not None:
-            return self._db_config["qqq_rule_a_enabled"]
-        return os.getenv("QQQ_RULE_A_ENABLED", "true").lower() == "true"
-
-    def is_qqq_rule_b_enabled(self) -> bool:
-        if self._db_config.get("qqq_rule_b_enabled") is not None:
-            return self._db_config["qqq_rule_b_enabled"]
-        return os.getenv("QQQ_RULE_B_ENABLED", "true").lower() == "true"
-
-    def is_qqq_rule_c_enabled(self) -> bool:
-        if self._db_config.get("qqq_rule_c_enabled") is not None:
-            return self._db_config["qqq_rule_c_enabled"]
-        return os.getenv("QQQ_RULE_C_ENABLED", "true").lower() == "true"
-
-    def is_qqq_rule_d_enabled(self) -> bool:
-        if self._db_config.get("qqq_rule_d_enabled") is not None:
-            return self._db_config["qqq_rule_d_enabled"]
-        return os.getenv("QQQ_RULE_D_ENABLED", "true").lower() == "true"
-
     def get_max_holding_days(self) -> int:
         if self._db_config.get("max_holding_days"):
             return int(self._db_config["max_holding_days"])
@@ -73,11 +53,6 @@ class Config:
         if self._db_config.get("stop_loss_threshold"):
             return float(self._db_config["stop_loss_threshold"])
         return float(os.getenv("STOP_LOSS_THRESHOLD", "0.30"))
-
-    def get_dte_warning_days(self) -> int:
-        if self._db_config.get("dte_warning_days"):
-            return int(self._db_config["dte_warning_days"])
-        return int(os.getenv("DTE_WARNING_DAYS", "45"))
 
     def get_alert_log_retention_days(self) -> int:
         if self._db_config.get("alert_log_retention_days"):
