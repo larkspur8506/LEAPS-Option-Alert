@@ -53,6 +53,7 @@ logs/
 htmlcov/
 test_*.py
 check_*.py
+tests/
 
 # 临时文件
 *.tmp
