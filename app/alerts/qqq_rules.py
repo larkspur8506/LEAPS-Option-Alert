@@ -5,119 +5,83 @@ from pytz import timezone
 et_tz = timezone("America/New_York")
 
 
-def check_qqq_rule_a(qqq_data: Dict) -> Optional[Dict]:
-    prev_close = qqq_data.get("prev_close")
-    current_price = qqq_data.get("last_price")
+def check_entry_signals(current_price: float, indicators: Dict, config) -> List[Dict]:
+    """
+    重构后的 QQQ 入场规则
+    根据 config 开关决定是否生成对应级别的信号
+    """
+    alerts = []
+    
+    ma20 = indicators.get('ma20')
+    ma200 = indicators.get('ma200')
+    rsi = indicators.get('rsi')
+    bb_upper = indicators.get('bb_upper')
+    bb_lower = indicators.get('bb_lower')
+    prev_close = indicators.get('prev_close')
+    three_day_prev_close = indicators.get('three_day_prev_close')
+    
+    # 必须数据检查
+    if not all([ma20, ma200, rsi, bb_upper, bb_lower, prev_close, three_day_prev_close]):
+        return []
 
-    if not prev_close or not current_price:
-        return None
+    # 1. 趋势判断
+    is_bear_market = current_price < ma200
+    bear_prefix = "⚠️ [熊市趋势] (价格低于年线) " if is_bear_market else ""
 
-    threshold = prev_close * 0.98
+    # 2. 分级信号
+    
+    # Level 1: 轻度回调
+    if config.is_entry_level1_enabled():
+        daily_drop_pct = (current_price - prev_close) / prev_close * 100
+        dist_ma20_pct = abs(current_price - ma20) / ma20 * 100
+        
+        if daily_drop_pct <= -1.2 and dist_ma20_pct <= 0.5:
+            alerts.append({
+                "rule_name": "Level 1 Entry",
+                "message": f"{bear_prefix}🟢 [日常回调] 跌幅 {daily_drop_pct:.2f}%, 触碰 MA20",
+                "trigger_condition": f"跌幅 {daily_drop_pct:.2f}% <= -1.2% AND MA20距离 {dist_ma20_pct:.2f}% <= 0.5%",
+                "severity": "LOW",
+                "alert_type": "QQQ_ENTRY_L1"
+            })
 
-    if current_price <= threshold:
-        drop_pct = (current_price - prev_close) / prev_close * 100
-        return {
-            "rule_name": "Rule A",
-            "message": f"QQQ 价格跌破昨日收盘价 2%，当前价格: ${current_price:.2f}",
-            "trigger_condition": f"当前价 ${current_price:.2f} <= 阈值 ${threshold:.2f}",
-            "severity": "HIGH",
-            "drop_percent": drop_pct,
-            "timestamp": datetime.now(et_tz)
-        }
+    # Level 2: 黄金坑
+    if config.is_entry_level2_enabled():
+        three_day_drop_pct = (current_price - three_day_prev_close) / three_day_prev_close * 100
+        
+        if three_day_drop_pct <= -3.5 and rsi < 32:
+            alerts.append({
+                "rule_name": "Level 2 Entry",
+                "message": f"{bear_prefix}🚨 [黄金坑机会] 3日跌幅 {three_day_drop_pct:.2f}%, RSI {rsi:.1f}",
+                "trigger_condition": f"3日跌幅 {three_day_drop_pct:.2f}% <= -3.5% AND RSI {rsi:.1f} < 32",
+                "severity": "HIGH",
+                "alert_type": "QQQ_ENTRY_L2"
+            })
 
-    return None
+    # Level 3: 极端超卖
+    if config.is_entry_level3_enabled():
+        if current_price < bb_lower:
+            alerts.append({
+                "rule_name": "Level 3 Entry",
+                "message": f"{bear_prefix}📉 [极端超卖] 价格跌破布林下轨",
+                "trigger_condition": f"价格 {current_price:.2f} < BB Lower {bb_lower:.2f}",
+                "severity": "CRITICAL",
+                "alert_type": "QQQ_ENTRY_L3"
+            })
 
+    # Add timestamp to all
+    for alert in alerts:
+        alert["timestamp"] = datetime.now(et_tz)
 
-def check_qqq_rule_b(qqq_data: Dict) -> Optional[Dict]:
-    intraday_high = qqq_data.get("intraday_high")
-    current_price = qqq_data.get("last_price")
-
-    if not intraday_high or not current_price:
-        return None
-
-    threshold = intraday_high * 0.98
-
-    if current_price <= threshold:
-        drop_pct = (current_price - intraday_high) / intraday_high * 100
-        return {
-            "rule_name": "Rule B",
-            "message": f"QQQ 价格跌破当日最高价 2%，当前价格: ${current_price:.2f}",
-            "trigger_condition": f"当前价 ${current_price:.2f} <= 阈值 ${threshold:.2f}",
-            "severity": "HIGH",
-            "drop_percent": drop_pct,
-            "timestamp": datetime.now(et_tz)
-        }
-
-    return None
-
-
-def check_qqq_rule_c(qqq_data: Dict) -> Optional[Dict]:
-    close_2_days_ago = qqq_data.get("close_2_days_ago")
-    current_price = qqq_data.get("last_price")
-
-    if not close_2_days_ago or not current_price:
-        return None
-
-    threshold = close_2_days_ago * 0.98
-
-    if current_price <= threshold:
-        drop_pct = (current_price - close_2_days_ago) / close_2_days_ago * 100
-        return {
-            "rule_name": "Rule C",
-            "message": f"QQQ 价格较2日前收盘价下跌2%以上，当前价格: ${current_price:.2f}",
-            "trigger_condition": f"当前价 ${current_price:.2f} <= 阈值 ${threshold:.2f}",
-            "severity": "MEDIUM",
-            "drop_percent": drop_pct,
-            "timestamp": datetime.now(et_tz)
-        }
-
-    return None
-
-
-def check_qqq_rule_d(qqq_data: Dict) -> Optional[Dict]:
-    rolling_high_3d = qqq_data.get("rolling_high_3d")
-    current_price = qqq_data.get("last_price")
-
-    if not rolling_high_3d or not current_price:
-        return None
-
-    threshold = rolling_high_3d * 0.98
-
-    if current_price <= threshold:
-        drop_pct = (current_price - rolling_high_3d) / rolling_high_3d * 100
-        return {
-            "rule_name": "Rule D",
-            "message": f"QQQ 价格跌破3日滚动高点 2%，当前价格: ${current_price:.2f}",
-            "trigger_condition": f"当前价 ${current_price:.2f} <= 阈值 ${threshold:.2f}",
-            "severity": "MEDIUM",
-            "drop_percent": drop_pct,
-            "timestamp": datetime.now(et_tz)
-        }
-
-    return None
+    return alerts
 
 
 def check_all_qqq_rules(qqq_data: Dict, config) -> List[Dict]:
-    alerts = []
+    """
+    Main entry point for QQQ checks
+    """
+    current_price = qqq_data.get("last_price")
+    if not current_price:
+        return []
 
-    if config.is_qqq_rule_a_enabled():
-        alert_a = check_qqq_rule_a(qqq_data)
-        if alert_a:
-            alerts.append(alert_a)
-
-    if config.is_qqq_rule_b_enabled():
-        alert_b = check_qqq_rule_b(qqq_data)
-        if alert_b:
-            alerts.append(alert_b)
-
-    if config.is_qqq_rule_c_enabled():
-        alert_c = check_qqq_rule_c(qqq_data)
-        if alert_c:
-            alerts.append(alert_c)
-
-    if config.is_qqq_rule_d_enabled():
-        alert_d = check_qqq_rule_d(qqq_data)
-        if alert_d:
-            alerts.append(alert_d)
-
-    return alerts
+    # 使用新的逻辑，传入 config
+    return check_entry_signals(current_price, qqq_data, config)

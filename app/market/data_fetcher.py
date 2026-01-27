@@ -3,6 +3,8 @@ from datetime import datetime, date, timedelta
 from pytz import timezone
 import logging
 import time
+import pandas as pd
+import yfinance as yf
 
 from app.database.models import DailyQQQData, AlertLog, OptionPosition
 from sqlalchemy.exc import IntegrityError
@@ -40,85 +42,206 @@ class DataFetcher:
         self.db = db
 
     def get_qqq_data(self) -> Dict[str, Any]:
-        today = datetime.now(et_tz).date()
-
-        # Yahoo Finance 提供当日数据（解决 Polygon 免费版限制）
-        yf_data = self.yfinance.get_qqq_today()
-
-        # Polygon.io 提供历史数据（确保数据质量）
-        poly_prev_close = self.polygon.get_qqq_prev_close()
-        poly_historical = self.polygon.get_qqq_historical(days=5)
-
-        # 组装数据
-        result = {
-            "date": today,
-            "last_price": yf_data.get("last_price"),  # 来自 Yahoo Finance
-            "intraday_high": yf_data.get("intraday_high"),  # 来自 Yahoo Finance
-        }
-
-        # 使用 Polygon 数据补充历史数据
-        if poly_prev_close:
-            result["prev_close"] = poly_prev_close
-        else:
-            # 如果 Polygon 失败，使用 Yahoo Finance 的前一日数据
-            result["prev_close"] = self.yfinance.get_qqq_prev_close()
-
-        if poly_historical:
-            # 2日前收盘
-            if len(poly_historical) >= 2:
-                result["close_2_days_ago"] = poly_historical[-2].get("close")
+        """
+        获取 QQQ 价格及技术指标
+        
+        策略优先级:
+        Level 1 (yfinance): 获取完整历史数据计算。
+        Level 2 (Polygon 灾备): 获取历史聚合数据重构 DataFrame，并打入实时最新价。
+        """
+        df = None
+        
+        # ---------------------------------------------------------
+        # Level 1: YFinance (Primary)
+        # ---------------------------------------------------------
+        try:
+            ticker = yf.Ticker("QQQ")
+            # 获取 1 年数据，确保有足够的历史计算 MA200
+            df = ticker.history(period="1y")
+            
+            if df is not None and not df.empty:
+                logger.info("[INFO] Successfully fetched QQQ history from yfinance")
             else:
-                result["close_2_days_ago"] = yf_data.get("prev_close")
+                logger.warning("[WARN] yfinance returned empty QQQ history")
+                df = None
+        except Exception as e:
+            logger.error(f"[ERROR] yfinance QQQ history failed: {e}")
+            df = None
 
-            # 3日前收盘
-            if len(poly_historical) >= 3:
-                result["close_3_days_ago"] = poly_historical[-3].get("close")
-            else:
-                result["close_3_days_ago"] = yf_data.get("prev_close")
+        # ---------------------------------------------------------
+        # Level 2: Polygon Fallback (Reconstruct DataFrame)
+        # ---------------------------------------------------------
+        if df is None:
+            logger.info("[FALLBACK] Attempting Polygon historical reconstruction...")
+            try:
+                # 获取约 300 天数据 (覆盖 1 年交易日)
+                poly_data = self.polygon.get_qqq_historical(days=300)
+                
+                if poly_data:
+                    # 1. 转换为 DataFrame
+                    df = pd.DataFrame(poly_data)
+                    
+                    # 2. 映射列名和索引
+                    # Polygon: date, open, high, low, close
+                    # Pandas/yfinance: Date(Index), Open, High, Low, Close
+                    df['Date'] = pd.to_datetime(df['date'])
+                    df.set_index('Date', inplace=True)
+                    df.rename(columns={
+                        'open': 'Open', 
+                        'high': 'High', 
+                        'low': 'Low', 
+                        'close': 'Close'
+                    }, inplace=True)
+                    
+                    # 删除多余列
+                    if 'date' in df.columns:
+                        del df['date']
+                        
+                    # 3. 实时补丁 (Realtime Patch)
+                    # Polygon 免费版通常延迟或只给到昨日，需手动获取今日最新价拼接到 DataFrame
+                    try:
+                        yf_today = self.yfinance.get_qqq_today()
+                        last_price = yf_today.get("last_price")
+                        
+                        if last_price:
+                            today_date = pd.Timestamp(datetime.now(et_tz).date())
+                            intraday_high = yf_today.get("intraday_high", last_price)
+                            
+                            # 构建今日行
+                            new_row = pd.Series({
+                                'Open': last_price, # 近似值
+                                'High': intraday_high,
+                                'Low': last_price, # 近似值
+                                'Close': last_price,
+                                'Volume': 0 # 占位
+                            }, name=today_date)
+                            
+                            # 追加或更新
+                            if today_date in df.index:
+                                df.loc[today_date] = new_row
+                            else:
+                                df = pd.concat([df, pd.DataFrame([new_row])])
+                                
+                            logger.info(f"[PATCH] Appended realtime price ${last_price} to Polygon history")
+                            
+                    except Exception as e:
+                         logger.warning(f"[WARN] Failed to patch realtime price: {e}")
+                
+            except Exception as e:
+                logger.error(f"[ERROR] Polygon fallback failed: {e}")
 
-            # 3日滚动最高
-            if poly_historical:
-                rolling_high = max(day.get("high", 0) for day in poly_historical[-3:])
-                result["rolling_high_3d"] = rolling_high
-            else:
-                result["rolling_high_3d"] = self.yfinance.get_qqq_3day_high()
-        else:
-            # 如果 Polygon 完全失败，使用 Yahoo Finance
-            result["rolling_high_3d"] = self.yfinance.get_qqq_3day_high()
-            result["close_2_days_ago"] = yf_data.get("prev_close")
-            result["close_3_days_ago"] = yf_data.get("prev_close")
+        # ---------------------------------------------------------
+        # Process DataFrame
+        # ---------------------------------------------------------
+        if df is not None and not df.empty:
+            return self._process_qqq_df(df)
+            
+        return {}
 
-        # 存储到数据库
-        if result.get("last_price"):
-            # 检查是否已存在当日数据
-            existing_data = self.db.query(DailyQQQData).filter_by(date=result["date"]).first()
-            if existing_data:
-                logger.info(f"QQQ data for {result['date']} already exists. Skipping insertion.")
-                # 可选：更新现有数据，如果需要
-                existing_data.close_price = result["last_price"]
-                existing_data.high_price = result.get("intraday_high")
-                existing_data.fetched_at = datetime.now(et_tz)
+    def _process_qqq_df(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        统一处理 Pandas DataFrame 计算指标
+        无论数据源是 yfinance 还是 Polygon，经过规整后都在这里统一通过。
+        """
+        try:
+            # 确保按日期排序
+            df = df.sort_index()
+            close_prices = df["Close"]
+            
+            # 判断是否降级 (不足以计算 MA200)
+            is_degraded = len(df) < 200
+
+            # MA20 / MA200
+            df["ma20"] = close_prices.rolling(window=20).mean()
+            df["ma200"] = close_prices.rolling(window=200).mean()
+
+            # Bollinger Bands (20, 2)
+            std_20 = close_prices.rolling(window=20).std()
+            df["bb_upper"] = df["ma20"] + 2 * std_20
+            df["bb_lower"] = df["ma20"] - 2 * std_20
+
+            # RSI (14) - Wilder's Smoothing (com=13)
+            delta = close_prices.diff()
+            gain = (delta.where(delta > 0, 0)).fillna(0)
+            loss = (-delta.where(delta < 0, 0)).fillna(0)
+            avg_gain = gain.ewm(com=13, adjust=False).mean()
+            avg_loss = loss.ewm(com=13, adjust=False).mean()
+            rs = avg_gain / avg_loss
+            df["rsi"] = 100 - (100 / (1 + rs))
+
+            # 提取最后一行
+            latest = df.iloc[-1]
+            last_price = float(latest["Close"])
+            intraday_high = float(latest["High"])
+
+            # 获取昨日 (-2) 和 3日前 (-4)
+            # 必须防御性处理越界，特别是在数据刚开始建立时
+            total_len = len(df)
+            
+            if total_len >= 2:
+                prev_close = float(df["Close"].iloc[-2])
             else:
-                daily_data = DailyQQQData(
-                    date=result["date"],
+                prev_close = last_price
+                
+            if total_len >= 4:
+                three_day_prev_close = float(df["Close"].iloc[-4])
+            else:
+                three_day_prev_close = float(df["Close"].iloc[0])
+
+            # 组装结果
+            result = {
+                "date": datetime.now(et_tz).date(),
+                "last_price": last_price,
+                "intraday_high": intraday_high,
+                
+                # 指标 (Pandas series 取最后一行可能为 NaN，需处理)
+                "ma20": float(latest["ma20"]) if pd.notna(latest["ma20"]) else None,
+                "ma200": float(latest["ma200"]) if pd.notna(latest["ma200"]) else None,
+                "rsi": float(latest["rsi"]) if pd.notna(latest["rsi"]) else None,
+                "bb_upper": float(latest["bb_upper"]) if pd.notna(latest["bb_upper"]) else None,
+                "bb_lower": float(latest["bb_lower"]) if pd.notna(latest["bb_lower"]) else None,
+                
+                # 历史参考
+                "prev_close": prev_close,
+                "three_day_prev_close": three_day_prev_close,
+                
+                # 状态位
+                "is_degraded": is_degraded
+            }
+
+            # 存入数据库
+            self._save_daily_data(result)
+
+            return result
+        except Exception as e:
+            logger.error(f"[ERROR] processing QQQ DF: {e}")
+            return {}
+
+    def _save_daily_data(self, result: Dict[str, Any]):
+        try:
+            if not result.get("last_price"):
+                return
+
+            date_val = result["date"]
+            # Check existing
+            existing = self.db.query(DailyQQQData).filter_by(date=date_val).first()
+            if existing:
+                existing.close_price = result["last_price"]
+                existing.high_price = result.get("intraday_high")
+                existing.fetched_at = datetime.now(et_tz)
+            else:
+                daily = DailyQQQData(
+                    date=date_val,
                     close_price=result["last_price"],
                     high_price=result.get("intraday_high"),
                     fetched_at=datetime.now(et_tz)
                 )
-                self.db.add(daily_data)
-
-        try:
+                self.db.add(daily)
+            
             self.db.commit()
-        except IntegrityError:
-            self.db.rollback()
-            logger.warning(f"Duplicate QQQ data for {result['date']} attempted, rolled back transaction.")
         except Exception as e:
             self.db.rollback()
-            logger.error(f"Error committing QQQ data for {result['date']}: {e}")
-            raise
-
-
-        return result
+            logger.error(f"Error saving daily data: {e}")
 
     @retry_on_failure(max_retries=2, delay=1.0)
     def get_option_current_price(self, position) -> Optional[float]:

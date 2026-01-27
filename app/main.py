@@ -53,10 +53,24 @@ async def startup_event():
         config_dict = {
             "polygon_api_key": config_db.polygon_api_key,
             "wechat_webhook_url": config_db.wechat_webhook_url,
+            # Legacy rules
             "qqq_rule_a_enabled": config_db.qqq_rule_a_enabled,
             "qqq_rule_b_enabled": config_db.qqq_rule_b_enabled,
             "qqq_rule_c_enabled": config_db.qqq_rule_c_enabled,
             "qqq_rule_d_enabled": config_db.qqq_rule_d_enabled,
+            # New entry rules
+            "entry_level1_enabled": getattr(config_db, 'entry_level1_enabled', True),
+            "entry_level2_enabled": getattr(config_db, 'entry_level2_enabled', True),
+            "entry_level3_enabled": getattr(config_db, 'entry_level3_enabled', True),
+            # New exit rules 
+            "exit_hard_tp_enabled": getattr(config_db, 'exit_hard_tp_enabled', True),
+            "exit_fast_tp_enabled": getattr(config_db, 'exit_fast_tp_enabled', True),
+            "exit_trailing_tp_enabled": getattr(config_db, 'exit_trailing_tp_enabled', True),
+            "exit_tech_tp_enabled": getattr(config_db, 'exit_tech_tp_enabled', True),
+            "exit_dte_warning_enabled": getattr(config_db, 'exit_dte_warning_enabled', True),
+            "exit_dte_force_enabled": getattr(config_db, 'exit_dte_force_enabled', True),
+            "exit_trend_stop_enabled": getattr(config_db, 'exit_trend_stop_enabled', True),
+            # Parameters
             "max_holding_days": config_db.max_holding_days,
             "take_profit_phase1_threshold": config_db.take_profit_phase1_threshold,
             "take_profit_phase1_days": config_db.take_profit_phase1_days,
@@ -68,6 +82,7 @@ async def startup_event():
             "alert_log_retention_days": config_db.alert_log_retention_days,
             "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
         }
+
 
         config = get_config(config_dict)
 
@@ -366,16 +381,25 @@ async def rules(request: Request, db: Session = Depends(get_db)):
 @app.post("/admin/rules")
 async def update_rules(
     request: Request,
+    # Legacy rules
     qqq_rule_a_enabled: bool = Form(False),
     qqq_rule_b_enabled: bool = Form(False),
     qqq_rule_c_enabled: bool = Form(False),
     qqq_rule_d_enabled: bool = Form(False),
+    # New entry rules
+    entry_level1_enabled: bool = Form(False),
+    entry_level2_enabled: bool = Form(False),
+    entry_level3_enabled: bool = Form(False),
+    # New exit rules
+    exit_hard_tp_enabled: bool = Form(False),
+    exit_fast_tp_enabled: bool = Form(False),
+    exit_trailing_tp_enabled: bool = Form(False),
+    exit_tech_tp_enabled: bool = Form(False),
+    exit_dte_warning_enabled: bool = Form(False),
+    exit_dte_force_enabled: bool = Form(False),
+    exit_trend_stop_enabled: bool = Form(False),
+    # Parameters
     max_holding_days: int = Form(270),
-    take_profit_phase1_threshold: float = Form(0.50),
-    take_profit_phase1_days: int = Form(120),
-    take_profit_phase2_threshold: float = Form(0.30),
-    take_profit_phase2_days: int = Form(180),
-    take_profit_phase3_threshold: float = Form(0.10),
     stop_loss_threshold: float = Form(0.30),
     dte_warning_days: int = Form(45),
     db: Session = Depends(get_db)
@@ -385,22 +409,35 @@ async def update_rules(
 
     config_db = db.query(Configuration).first()
 
+    # Legacy rules
     config_db.qqq_rule_a_enabled = qqq_rule_a_enabled
     config_db.qqq_rule_b_enabled = qqq_rule_b_enabled
     config_db.qqq_rule_c_enabled = qqq_rule_c_enabled
     config_db.qqq_rule_d_enabled = qqq_rule_d_enabled
+    
+    # New entry rules
+    config_db.entry_level1_enabled = entry_level1_enabled
+    config_db.entry_level2_enabled = entry_level2_enabled
+    config_db.entry_level3_enabled = entry_level3_enabled
+    
+    # New exit rules
+    config_db.exit_hard_tp_enabled = exit_hard_tp_enabled
+    config_db.exit_fast_tp_enabled = exit_fast_tp_enabled
+    config_db.exit_trailing_tp_enabled = exit_trailing_tp_enabled
+    config_db.exit_tech_tp_enabled = exit_tech_tp_enabled
+    config_db.exit_dte_warning_enabled = exit_dte_warning_enabled
+    config_db.exit_dte_force_enabled = exit_dte_force_enabled
+    config_db.exit_trend_stop_enabled = exit_trend_stop_enabled
+    
+    # Parameters
     config_db.max_holding_days = max_holding_days
-    config_db.take_profit_phase1_threshold = take_profit_phase1_threshold
-    config_db.take_profit_phase1_days = take_profit_phase1_days
-    config_db.take_profit_phase2_threshold = take_profit_phase2_threshold
-    config_db.take_profit_phase2_days = take_profit_phase2_days
-    config_db.take_profit_phase3_threshold = take_profit_phase3_threshold
     config_db.stop_loss_threshold = stop_loss_threshold
     config_db.dte_warning_days = dte_warning_days
 
     db.commit()
 
     return RedirectResponse(url="/admin/rules", status_code=303)
+
 
 
 @app.get("/admin/logs", response_class=HTMLResponse)

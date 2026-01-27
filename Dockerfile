@@ -2,8 +2,12 @@ FROM python:3.11-alpine
 
 WORKDIR /app
 
-# 安装系统依赖
-RUN apk add --no-cache gcc musl-dev
+# 安装系统依赖和时区数据
+RUN apk add --no-cache gcc musl-dev tzdata
+
+# 设置时区为美国东部时间
+ENV TZ=America/New_York
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # 复制依赖文件并安装
 COPY requirements.txt .

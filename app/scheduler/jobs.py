@@ -32,37 +32,54 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
     logger.info("Starting QQQ and options checks...")
     notifier = get_wechat_notifier(config.get_wechat_webhook_url())
 
+    # 1. 获取 QQQ 数据和指标
     qqq_data = data_fetcher.get_qqq_data()
 
     if qqq_data.get("last_price"):
+        # 2. 检查 QQQ 入场信号
         qqq_alerts = qqq_rules.check_all_qqq_rules(qqq_data, config)
 
         for alert in qqq_alerts:
+            # 使用 rule_name 进行去重
             if dedup.should_alert(alert["rule_name"]):
                 success = notifier.send_qqq_alert(alert)
                 _log_alert(db, alert, success)
 
+    # 3. 检查持仓期权
     from app.database.models import OptionPosition
     positions = db.query(OptionPosition).all()
 
     for position in positions:
         try:
+            # 获取期权当前价格
             current_price = data_fetcher.get_option_current_price(position)
 
             if current_price is None:
                 logger.warning(f"Failed to get price for position {position.id}, skipping")
                 continue
 
+            # 更新当前价格
             position.current_price = current_price
             position.last_price_update = get_current_time_et()
+            
+            # 4. 检查出场/风控信号 (Task 3 Logic)
+            # check_position_signals 返回 {'alerts':List, 'new_max_profit':float}
+            result = option_rules.check_position_signals(position, current_price, qqq_data, config)
+            
+            # 更新 max_profit
+            new_max_profit = result.get("new_max_profit", 0.0)
+            if new_max_profit > getattr(position, "max_profit", 0.0):
+                position.max_profit = new_max_profit
+            
             db.commit()
 
-            option_alerts = option_rules.check_all_option_rules(position, current_price, config)
-
+            # 处理报警
+            option_alerts = result.get("alerts", [])
             for alert in option_alerts:
                 position_ticker = option_rules.format_position_ticker(position)
                 rule_name = alert["rule_name"]
 
+                # 针对每个 position 去重
                 if dedup.should_alert(rule_name, position.id):
                     success = notifier.send_option_alert(alert, position_ticker)
                     alert["position_id"] = position.id
