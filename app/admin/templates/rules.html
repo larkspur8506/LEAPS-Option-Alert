@@ -45,7 +45,7 @@
                 <label class="flex items-center">
                     <input type="checkbox" name="exit_hard_tp_enabled" {% if config.exit_hard_tp_enabled %}checked{%
                         endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>🎯 硬性止盈:</strong> 盈利达到 50%</span>
+                    <span class="text-gray-700"><strong>🎯 阶梯止盈:</strong> 4个月(50%) / 5-6个月(30%) / 7个月+(10%)</span>
                 </label>
 
                 <label class="flex items-center">
@@ -94,32 +94,12 @@
             </div>
         </div>
 
-        <!-- 期权参数配置 -->
-        <div class="bg-white rounded-lg shadow-md p-6">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">⚙️ 参数配置</h2>
-            <p class="text-gray-600 mb-4">配置期权持仓和止损相关参数</p>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">最大持仓天数</label>
-                    <input type="number" name="max_holding_days" value="{{ config.max_holding_days }}" required
-                        class="w-full px-4 py-2 border border-gray-300 rounded-md">
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">止损阈值 (%)</label>
-                    <input type="number" step="0.01" name="stop_loss_threshold" value="{{ config.stop_loss_threshold }}"
-                        required class="w-full px-4 py-2 border border-gray-300 rounded-md">
-                    <p class="text-xs text-gray-500 mt-1">例如 0.30 表示 -30%</p>
-                </div>
-
-                <div class="flex justify-end">
-                    <button type="submit"
-                        class="bg-blue-600 text-white py-2 px-6 rounded-md hover:bg-blue-700 transition">
-                        保存配置
-                    </button>
-                </div>
-
+        <div class="flex justify-end mt-8">
+            <button type="submit"
+                class="bg-blue-600 text-white py-2 px-8 rounded-md hover:bg-blue-700 transition font-bold shadow-lg">
+                保存配置
+            </button>
+        </div>
     </form>
 </div>
 {% endblock %}

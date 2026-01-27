@@ -66,13 +66,6 @@ async def startup_event():
             "exit_dte_force_enabled": getattr(config_db, 'exit_dte_force_enabled', True),
             "exit_trend_stop_enabled": getattr(config_db, 'exit_trend_stop_enabled', True),
             # Parameters
-            "max_holding_days": config_db.max_holding_days,
-            "take_profit_phase1_threshold": config_db.take_profit_phase1_threshold,
-            "take_profit_phase1_days": config_db.take_profit_phase1_days,
-            "take_profit_phase2_threshold": config_db.take_profit_phase2_threshold,
-            "take_profit_phase2_days": config_db.take_profit_phase2_days,
-            "take_profit_phase3_threshold": config_db.take_profit_phase3_threshold,
-            "stop_loss_threshold": config_db.stop_loss_threshold,
             "alert_log_retention_days": config_db.alert_log_retention_days,
             "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
         }
@@ -387,9 +380,6 @@ async def update_rules(
     exit_dte_warning_enabled: bool = Form(False),
     exit_dte_force_enabled: bool = Form(False),
     exit_trend_stop_enabled: bool = Form(False),
-    # Parameters
-    max_holding_days: int = Form(270),
-    stop_loss_threshold: float = Form(0.30),
     db: Session = Depends(get_db)
 ):
     if not verify_admin_cookie(request):
@@ -410,10 +400,6 @@ async def update_rules(
     config_db.exit_dte_warning_enabled = exit_dte_warning_enabled
     config_db.exit_dte_force_enabled = exit_dte_force_enabled
     config_db.exit_trend_stop_enabled = exit_trend_stop_enabled
-    
-    # Parameters
-    config_db.max_holding_days = max_holding_days
-    config_db.stop_loss_threshold = stop_loss_threshold
 
 
     db.commit()

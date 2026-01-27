@@ -30,17 +30,6 @@ class Configuration(Base):
     exit_dte_force_enabled = Column(Boolean, default=True)    # DTE 强制清仓
     exit_trend_stop_enabled = Column(Boolean, default=True)   # 趋势崩坏止损
 
-    max_holding_days = Column(Integer, default=270)
-
-    take_profit_phase1_threshold = Column(Float, default=0.50)
-    take_profit_phase1_days = Column(Integer, default=120)
-    take_profit_phase2_threshold = Column(Float, default=0.30)
-    take_profit_phase2_days = Column(Integer, default=180)
-    take_profit_phase3_threshold = Column(Float, default=0.10)
-
-    stop_loss_threshold = Column(Float, default=0.30)
-
-
     alert_log_retention_days = Column(Integer, default=90)
     daily_qqq_data_retention_days = Column(Integer, default=30)
 

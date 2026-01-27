@@ -19,41 +19,6 @@ class Config:
             return self._db_config["wechat_webhook_url"]
         return os.getenv("WECHAT_WEBHOOK_URL", "")
 
-    def get_max_holding_days(self) -> int:
-        if self._db_config.get("max_holding_days"):
-            return int(self._db_config["max_holding_days"])
-        return int(os.getenv("MAX_HOLDING_DAYS", "270"))
-
-    def get_take_profit_phase1_threshold(self) -> float:
-        if self._db_config.get("take_profit_phase1_threshold"):
-            return float(self._db_config["take_profit_phase1_threshold"])
-        return float(os.getenv("TAKE_PROFIT_PHASE1_THRESHOLD", "0.50"))
-
-    def get_take_profit_phase1_days(self) -> int:
-        if self._db_config.get("take_profit_phase1_days"):
-            return int(self._db_config["take_profit_phase1_days"])
-        return int(os.getenv("TAKE_PROFIT_PHASE1_DAYS", "120"))
-
-    def get_take_profit_phase2_threshold(self) -> float:
-        if self._db_config.get("take_profit_phase2_threshold"):
-            return float(self._db_config["take_profit_phase2_threshold"])
-        return float(os.getenv("TAKE_PROFIT_PHASE2_THRESHOLD", "0.30"))
-
-    def get_take_profit_phase2_days(self) -> int:
-        if self._db_config.get("take_profit_phase2_days"):
-            return int(self._db_config["take_profit_phase2_days"])
-        return int(os.getenv("TAKE_PROFIT_PHASE2_DAYS", "180"))
-
-    def get_take_profit_phase3_threshold(self) -> float:
-        if self._db_config.get("take_profit_phase3_threshold"):
-            return float(self._db_config["take_profit_phase3_threshold"])
-        return float(os.getenv("TAKE_PROFIT_PHASE3_THRESHOLD", "0.10"))
-
-    def get_stop_loss_threshold(self) -> float:
-        if self._db_config.get("stop_loss_threshold"):
-            return float(self._db_config["stop_loss_threshold"])
-        return float(os.getenv("STOP_LOSS_THRESHOLD", "0.30"))
-
     def get_alert_log_retention_days(self) -> int:
         if self._db_config.get("alert_log_retention_days"):
             return int(self._db_config["alert_log_retention_days"])

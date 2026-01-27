@@ -55,14 +55,25 @@ def check_position_signals(position, current_opt_price: float, qqq_indicators: D
 
     # 2. 止盈规则
     
-    # 硬性止盈: >= 50%
-    if is_enabled('is_exit_hard_tp_enabled') and pnl_pct >= 0.50:
-        alerts.append({
-            "rule_name": "Hard Take Profit",
-            "message": "🎯 [目标达成] 收益达到 50%",
-            "severity": "HIGH",
-            "trigger_condition": f"盈利 {pnl_pct*100:.1f}% >= 50%"
-        })
+    # 硬性阶梯止盈: 随持仓时间降低预期
+    if is_enabled('is_exit_hard_tp_enabled'):
+        tp_threshold = 0.50
+        duration_desc = "4个月内"
+        
+        if held_days > 180:
+            tp_threshold = 0.10
+            duration_desc = "7个月以上"
+        elif held_days > 120:
+            tp_threshold = 0.30
+            duration_desc = "5-6个月"
+            
+        if pnl_pct >= tp_threshold:
+            alerts.append({
+                "rule_name": "Tiered Take Profit",
+                "message": f"🎯 [目标达成] {duration_desc}收益达标 ({tp_threshold*100:.0f}%)",
+                "severity": "HIGH",
+                "trigger_condition": f"持仓{held_days}天({duration_desc}) AND 盈利 {pnl_pct*100:.1f}% >= {tp_threshold*100:.0f}%"
+            })
         
     # 极速止盈: 持仓 <= 7天 AND 收益 >= 15%
     if is_enabled('is_exit_fast_tp_enabled') and held_days <= 7 and pnl_pct >= 0.15:
