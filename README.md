@@ -61,23 +61,62 @@
    cd leaps-option-alert
    ```
 
-### 快速启动
+### Docker 部署（推荐）
 
-1. **一键部署 (推荐)**:
-   项目内置了 `deploy.sh` 脚本，支持在 Linux 自动安装 Docker 环境、拉取镜像并完成配置：
+#### 1. 环境配置
+复制 `.env.example` 文件为 `.env`，并填入真实配置值：
+```bash
+cp .env.example .env
+```
+
+编辑 `.env` 文件，填入以下必要配置：
+- `ADMIN_PASSWORD`: 管理员密码
+- `POLYGON_API_KEY`: 从 Polygon.io 获取的 API Key
+- `WECHAT_WEBHOOK_URL`: 企业微信机器人 Webhook 地址
+- 其他可选配置项可根据需要启用/禁用
+
+#### 2. 构建并启动服务
+使用 Docker Compose 构建并启动服务：
+```bash
+docker-compose up -d --build
+```
+
+#### 3. 服务管理命令
+- 查看服务状态：`docker-compose ps`
+- 查看实时日志：`docker-compose logs -f`
+- 重启服务：`docker-compose restart`
+- 停止服务：`docker-compose down`
+- 更新应用：修改代码后重新运行 `docker-compose up -d --build`
+
+#### 4. 初始化系统
+首次启动后，访问 `http://localhost:8000/setup` 进行系统初始化设置。
+
+#### 5. 数据持久化
+系统数据（包括 SQLite 数据库）将持久化存储在 Docker 卷 `leaps` 中，即使容器重启也不会丢失数据。
+
+### 传统部署方式
+
+1. **创建虚拟环境**:
    ```bash
-   chmod +x deploy.sh
-   ./deploy.sh
+   python -m venv venv
+   source venv/bin/activate  # Linux/Mac
+   # 或
+   venv\Scripts\activate  # Windows
    ```
 
-2. **手动部署**:
+2. **安装依赖**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **配置环境变量**:
    复制 `.env.example` -> `.env` 并填写 API Key。
+
+4. **启动应用**:
    ```bash
-   docker-compose up -d --build
+   uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
 
-3. **初始化**:
-   访问 `http://localhost:8000/setup` 设置管理员密码。
 
 ### 数据库更新说明
 若从 1.0 版本升级，请确保执行以下 SQL 以支持移动止盈功能：
