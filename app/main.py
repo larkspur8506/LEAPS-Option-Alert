@@ -54,17 +54,17 @@ async def startup_event():
             "polygon_api_key": config_db.polygon_api_key,
             "wechat_webhook_url": config_db.wechat_webhook_url,
             # New entry rules
-            "entry_level1_enabled": getattr(config_db, 'entry_level1_enabled', True),
-            "entry_level2_enabled": getattr(config_db, 'entry_level2_enabled', True),
-            "entry_level3_enabled": getattr(config_db, 'entry_level3_enabled', True),
-            # New exit rules 
-            "exit_hard_tp_enabled": getattr(config_db, 'exit_hard_tp_enabled', True),
-            "exit_fast_tp_enabled": getattr(config_db, 'exit_fast_tp_enabled', True),
-            "exit_trailing_tp_enabled": getattr(config_db, 'exit_trailing_tp_enabled', True),
-            "exit_tech_tp_enabled": getattr(config_db, 'exit_tech_tp_enabled', True),
-            "exit_dte_warning_enabled": getattr(config_db, 'exit_dte_warning_enabled', True),
-            "exit_dte_force_enabled": getattr(config_db, 'exit_dte_force_enabled', True),
-            "exit_trend_stop_enabled": getattr(config_db, 'exit_trend_stop_enabled', True),
+            "entry_level1_enabled": getattr(config_db, 'entry_level1_enabled', None),
+            "entry_level2_enabled": getattr(config_db, 'entry_level2_enabled', None),
+            "entry_level3_enabled": getattr(config_db, 'entry_level3_enabled', None),
+            # New exit rules
+            "exit_hard_tp_enabled": getattr(config_db, 'exit_hard_tp_enabled', None),
+            "exit_fast_tp_enabled": getattr(config_db, 'exit_fast_tp_enabled', None),
+            "exit_trailing_tp_enabled": getattr(config_db, 'exit_trailing_tp_enabled', None),
+            "exit_tech_tp_enabled": getattr(config_db, 'exit_tech_tp_enabled', None),
+            "exit_dte_warning_enabled": getattr(config_db, 'exit_dte_warning_enabled', None),
+            "exit_dte_force_enabled": getattr(config_db, 'exit_dte_force_enabled', None),
+            "exit_trend_stop_enabled": getattr(config_db, 'exit_trend_stop_enabled', None),
             # Parameters
             "alert_log_retention_days": config_db.alert_log_retention_days,
             "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,

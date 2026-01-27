@@ -33,53 +33,53 @@ class Config:
     def is_entry_level1_enabled(self) -> bool:
         if self._db_config.get("entry_level1_enabled") is not None:
             return self._db_config["entry_level1_enabled"]
-        return True
+        return os.getenv("ENTRY_LEVEL1_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_entry_level2_enabled(self) -> bool:
         if self._db_config.get("entry_level2_enabled") is not None:
             return self._db_config["entry_level2_enabled"]
-        return True
+        return os.getenv("ENTRY_LEVEL2_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_entry_level3_enabled(self) -> bool:
         if self._db_config.get("entry_level3_enabled") is not None:
             return self._db_config["entry_level3_enabled"]
-        return True
+        return os.getenv("ENTRY_LEVEL3_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     # 新版出场规则开关
     def is_exit_hard_tp_enabled(self) -> bool:
         if self._db_config.get("exit_hard_tp_enabled") is not None:
             return self._db_config["exit_hard_tp_enabled"]
-        return True
+        return os.getenv("EXIT_HARD_TP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_exit_fast_tp_enabled(self) -> bool:
         if self._db_config.get("exit_fast_tp_enabled") is not None:
             return self._db_config["exit_fast_tp_enabled"]
-        return True
+        return os.getenv("EXIT_FAST_TP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_exit_trailing_tp_enabled(self) -> bool:
         if self._db_config.get("exit_trailing_tp_enabled") is not None:
             return self._db_config["exit_trailing_tp_enabled"]
-        return True
+        return os.getenv("EXIT_TRAILING_TP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_exit_tech_tp_enabled(self) -> bool:
         if self._db_config.get("exit_tech_tp_enabled") is not None:
             return self._db_config["exit_tech_tp_enabled"]
-        return True
+        return os.getenv("EXIT_TECH_TP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_exit_dte_warning_enabled(self) -> bool:
         if self._db_config.get("exit_dte_warning_enabled") is not None:
             return self._db_config["exit_dte_warning_enabled"]
-        return True
+        return os.getenv("EXIT_DTE_WARNING_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_exit_dte_force_enabled(self) -> bool:
         if self._db_config.get("exit_dte_force_enabled") is not None:
             return self._db_config["exit_dte_force_enabled"]
-        return True
+        return os.getenv("EXIT_DTE_FORCE_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
     def is_exit_trend_stop_enabled(self) -> bool:
         if self._db_config.get("exit_trend_stop_enabled") is not None:
             return self._db_config["exit_trend_stop_enabled"]
-        return True
+        return os.getenv("EXIT_TREND_STOP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
 
 def get_config(db_config: Optional[dict] = None) -> Config:

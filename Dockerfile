@@ -13,7 +13,7 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制应用代码（不包括.env，会被.dockerignore忽略）
+# 复制应用代码（注意：.env文件被.dockerignore忽略，不会包含在镜像中）
 COPY . .
 
 # 创建数据目录
@@ -27,4 +27,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 EXPOSE 8000
 
 # 启动应用
+# 注意：必需通过环境变量提供配置（如WECHAT_WEBHOOK_URL、POLYGON_API_KEY等）
+# 可通过 --env-file 或 -e 参数设置
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
