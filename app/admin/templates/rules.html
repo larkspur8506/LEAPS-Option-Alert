@@ -3,100 +3,177 @@
 {% block title %}规则配置{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
+<div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex justify-between items-center mb-8">
-        <h1 class="text-3xl font-bold text-gray-800">规则配置</h1>
-        <a href="/admin" class="text-blue-600 hover:text-blue-800">返回 Dashboard</a>
+        <div>
+            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">规则配置</h1>
+            <p class="text-sm text-gray-500 mt-1">定制您的交易提醒策略</p>
+        </div>
+        <a href="/admin"
+            class="flex-1 sm:flex-none bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all text-center">
+            返回 Dashboard
+        </a>
     </div>
 
-    <form action="/admin/rules" method="post" class="space-y-8">
+    <form action="/admin/rules" method="post" class="space-y-6">
         <!-- QQQ 入场规则 (新版 Level 1/2/3) -->
-        <div class="bg-white rounded-lg shadow-md p-6">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">🟢 QQQ 入场规则</h2>
-            <p class="text-gray-600 mb-4">启用或禁用分级入场提醒规则</p>
+        <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2 bg-green-50 rounded-lg">
+                    <span class="text-xl">🟢</span>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-900">QQQ 入场规则</h2>
+                    <p class="text-sm text-gray-500">分级入场提醒设置</p>
+                </div>
+            </div>
 
-            <div class="space-y-3">
-                <label class="flex items-center">
+            <div class="space-y-4 pl-0 sm:pl-14">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="entry_level1_enabled" {% if config.entry_level1_enabled %}checked{%
-                        endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>Level 1 (日常回调):</strong> 跌幅 ≥ 1.2% 且触碰 MA20</span>
+                        endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">Level 1 (日常回调)</strong>
+                        跌幅 ≥ 1.2% 且触碰 MA20
+                    </span>
                 </label>
 
-                <label class="flex items-center">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="entry_level2_enabled" {% if config.entry_level2_enabled %}checked{%
-                        endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>Level 2 (黄金坑):</strong> 3日累计跌幅 ≥ 3.5% 且 RSI &lt; 32</span>
+                        endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">Level 2 (黄金坑)</strong>
+                        3日累计跌幅 ≥ 3.5% 且 RSI &lt; 32
+                    </span>
                 </label>
 
-                <label class="flex items-center">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="entry_level3_enabled" {% if config.entry_level3_enabled %}checked{%
-                        endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>Level 3 (极端超卖):</strong> 价格跌破布林下轨</span>
+                        endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">Level 3 (极端超卖)</strong>
+                        价格跌破布林下轨
+                    </span>
                 </label>
             </div>
         </div>
 
         <!-- 期权止盈规则 -->
-        <div class="bg-white rounded-lg shadow-md p-6">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">🎯 期权止盈规则</h2>
-            <p class="text-gray-600 mb-4">启用或禁用多维止盈提醒</p>
+        <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2 bg-blue-50 rounded-lg">
+                    <span class="text-xl">🎯</span>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-900">期权止盈规则</h2>
+                    <p class="text-sm text-gray-500">多维止盈提醒设置</p>
+                </div>
+            </div>
 
-            <div class="space-y-3">
-                <label class="flex items-center">
+            <div class="space-y-4 pl-0 sm:pl-14">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="exit_hard_tp_enabled" {% if config.exit_hard_tp_enabled %}checked{%
-                        endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>🎯 阶梯止盈:</strong> 4个月(50%) / 5-6个月(30%) / 7个月+(10%)</span>
+                        endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">阶梯止盈</strong>
+                        4个月(50%) / 5-6个月(30%) / 7个月+(10%)
+                    </span>
                 </label>
 
-                <label class="flex items-center">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="exit_fast_tp_enabled" {% if config.exit_fast_tp_enabled %}checked{%
-                        endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>🚀 极速止盈:</strong> 持仓 ≤ 7天且盈利达到 15%</span>
+                        endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">极速止盈 (Rocket)</strong>
+                        持仓 ≤ 7天且盈利达到 15%
+                    </span>
                 </label>
 
-                <label class="flex items-center">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="exit_trailing_tp_enabled" {% if config.exit_trailing_tp_enabled
-                        %}checked{% endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>📉 移动止盈:</strong> 最高收益 &gt; 30% 后回撤超过 10%</span>
+                        %}checked{% endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">移动止盈</strong>
+                        最高收益 &gt; 30% 后回撤超过 10%
+                    </span>
                 </label>
 
-                <label class="flex items-center">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="exit_tech_tp_enabled" {% if config.exit_tech_tp_enabled %}checked{%
-                        endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>⚠️ 技术止盈:</strong> QQQ RSI &gt; 75 或突破布林上轨</span>
+                        endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">技术止盈</strong>
+                        QQQ RSI &gt; 75 或突破布林上轨
+                    </span>
                 </label>
             </div>
         </div>
 
         <!-- 期权风控规则 -->
-        <div class="bg-white rounded-lg shadow-md p-6">
-            <h2 class="text-xl font-bold text-gray-800 mb-4">🛡️ 期权风控规则</h2>
-            <p class="text-gray-600 mb-4">启用或禁用时间和趋势风控提醒</p>
+        <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2 bg-red-50 rounded-lg">
+                    <span class="text-xl">🛡️</span>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-900">期权风控规则</h2>
+                    <p class="text-sm text-gray-500">风险控制与强制平仓设置</p>
+                </div>
+            </div>
 
-            <div class="space-y-3">
-                <label class="flex items-center">
+            <div class="space-y-4 pl-0 sm:pl-14">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="exit_dte_warning_enabled" {% if config.exit_dte_warning_enabled
-                        %}checked{% endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>⏳ 移仓窗口:</strong> DTE &lt; 120 天提醒</span>
+                        %}checked{% endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">移仓窗口</strong>
+                        DTE &lt; 120 天提醒
+                    </span>
                 </label>
 
-                <label class="flex items-center">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="exit_dte_force_enabled" {% if config.exit_dte_force_enabled %}checked{%
-                        endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>⛔ 强制清仓:</strong> DTE &lt; 90 天提醒</span>
+                        endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">强制清仓</strong>
+                        DTE &lt; 90 天提醒
+                    </span>
                 </label>
 
-                <label class="flex items-center">
+                <label
+                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
                     <input type="checkbox" name="exit_trend_stop_enabled" {% if config.exit_trend_stop_enabled
-                        %}checked{% endif %} class="mr-2">
-                    <span class="text-gray-700"><strong>🛑 趋势崩坏:</strong> QQQ 有效跌破 MA200</span>
+                        %}checked{% endif %}
+                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
+                    <span class="text-gray-700 text-sm leading-relaxed">
+                        <strong class="block text-gray-900 font-medium mb-0.5">趋势崩坏</strong>
+                        QQQ 有效跌破 MA200
+                    </span>
                 </label>
             </div>
         </div>
 
-        <div class="flex justify-end mt-8">
+        <div class="sticky bottom-4 z-10 flex justify-end">
             <button type="submit"
-                class="bg-blue-600 text-white py-2 px-8 rounded-md hover:bg-blue-700 transition font-bold shadow-lg">
+                class="bg-blue-600 text-white py-3 px-8 rounded-xl hover:bg-blue-700 active:scale-95 transition-all font-bold shadow-lg shadow-blue-500/30">
                 保存配置
             </button>
         </div>

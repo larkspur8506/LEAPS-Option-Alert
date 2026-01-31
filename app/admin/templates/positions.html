@@ -3,176 +3,367 @@
 {% block title %}仓位管理{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-4 py-8">
-    <div class="flex justify-between items-center mb-8">
-        <h1 class="text-3xl font-bold text-gray-800">期权仓位管理</h1>
-        <div class="flex gap-4">
-            <button onclick="refreshAllPrices()" class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition">
-                刷新所有价格
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
+        <div>
+            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">期权仓位</h1>
+            <p class="text-sm text-gray-500 mt-1">管理您的 LEAPS 与波段仓位</p>
+        </div>
+        <div class="flex gap-3 w-full sm:w-auto">
+            <button onclick="refreshAllPrices()"
+                class="flex-1 sm:flex-none bg-green-500 hover:bg-green-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all active:scale-95 flex items-center justify-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
+                    </path>
+                </svg>
+                刷新价格
             </button>
-            <a href="/admin" class="text-blue-600 hover:text-blue-800 py-2">返回 Dashboard</a>
+            <a href="/admin"
+                class="flex-1 sm:flex-none bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all text-center">
+                Dashboard
+            </a>
         </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-        <h2 class="text-xl font-bold text-gray-800 mb-4">添加仓位</h2>
-        <form action="/admin/positions" method="post" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">标的</label>
-                <select name="underlying" class="w-full px-4 py-2 border border-gray-300 rounded-md">
-                    <option value="QQQ" selected>QQQ</option>
-                </select>
-            </div>
+    <!-- Add Position Card -->
+    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 mb-8 overflow-hidden">
+        <div class="px-6 py-4 border-b border-gray-50 bg-gray-50/50">
+            <h2 class="text-base font-semibold text-gray-900">建仓登记</h2>
+        </div>
+        <div class="p-6">
+            <form action="/admin/positions" method="post" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div class="space-y-1.5">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">标的</label>
+                    <div class="relative">
+                        <select name="underlying"
+                            class="block w-full text-base bg-gray-50 border-transparent text-gray-900 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all py-2.5">
+                            <option value="QQQ" selected>QQQ</option>
+                        </select>
+                    </div>
+                </div>
 
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">类型</label>
-                <select name="option_type" class="w-full px-4 py-2 border border-gray-300 rounded-md">
-                    <option value="CALL">Call</option>
-                    <option value="PUT">Put</option>
-                </select>
-            </div>
+                <div class="space-y-1.5">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">类型</label>
+                    <select name="option_type"
+                        class="block w-full text-base bg-gray-50 border-transparent text-gray-900 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all py-2.5">
+                        <option value="CALL">Call</option>
+                        <option value="PUT">Put</option>
+                    </select>
+                </div>
 
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">行权价</label>
-                <input type="number" step="0.01" name="strike_price" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
-            </div>
+                <div class="space-y-1.5">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">行权价</label>
+                    <input type="number" step="0.01" name="strike_price" required placeholder="0.00"
+                        class="block w-full text-base bg-gray-50 border-transparent text-gray-900 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all py-2.5 px-3">
+                </div>
 
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">到期日</label>
-                <input type="date" name="expiration_date" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
-            </div>
+                <div class="space-y-1.5">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">到期日</label>
+                    <input type="date" name="expiration_date" required
+                        class="block w-full text-base bg-gray-50 border-transparent text-gray-900 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all py-2.5 px-3">
+                </div>
 
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">入场价</label>
-                <input type="number" step="0.01" name="entry_price" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
-            </div>
+                <div class="space-y-1.5">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">入场价</label>
+                    <input type="number" step="0.01" name="entry_price" required placeholder="0.00"
+                        class="block w-full text-base bg-gray-50 border-transparent text-gray-900 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all py-2.5 px-3">
+                </div>
 
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">数量 (可选)</label>
-                <input type="number" name="quantity" class="w-full px-4 py-2 border border-gray-300 rounded-md">
-            </div>
+                <div class="space-y-1.5">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">数量</label>
+                    <input type="number" name="quantity" placeholder="1"
+                        class="block w-full text-base bg-gray-50 border-transparent text-gray-900 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all py-2.5 px-3">
+                </div>
 
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">入场日期</label>
-                <input type="date" name="entry_date" required class="w-full px-4 py-2 border border-gray-300 rounded-md">
-            </div>
+                <div class="space-y-1.5">
+                    <label class="block text-xs font-medium text-gray-500 uppercase tracking-wider">入场日期</label>
+                    <input type="date" name="entry_date" required
+                        class="block w-full text-base bg-gray-50 border-transparent text-gray-900 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all py-2.5 px-3">
+                </div>
 
-            <div class="md:col-span-2">
-                <button type="submit" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition">
-                    添加仓位
-                </button>
-            </div>
-        </form>
+                <div class="sm:col-span-2 lg:col-span-1 pt-6 sm:pt-0 flex items-end">
+                    <button type="submit"
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl shadow-sm transition-all active:scale-95">
+                        提交持仓
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
 
-    <div class="bg-white rounded-lg shadow-md overflow-hidden">
-        <table class="w-full">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">标的</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">行权价</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">当前价</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">入场价</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">盈亏</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">比例</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">数量</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">到期日</th>
-                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {% for position in positions %}
-                <tr id="position-{{ position.id }}">
-                    <td class="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{ position.underlying }}</td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500">{{ position.option_type }}</td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500">${{ position.strike_price }}</td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-900 font-bold" id="price-{{ position.id }}">
-                        {% if position.current_price %}
-                        ${{ "%.2f"|format(position.current_price) }}
-                        {% else %}
-                        <span class="text-gray-400">-</span>
-                        {% endif %}
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500">${{ position.entry_price }}</td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm" id="pnl-{{ position.id }}">
-                        {% if position.current_price %}
-                        {% set pnl_amount = (position.current_price - position.entry_price) * (position.quantity or 1) %}
-                        {% set pnl_pct = ((position.current_price - position.entry_price) / position.entry_price * 100) if position.entry_price > 0 else 0 %}
-                        <span class="{{ 'text-green-600' if pnl_amount >= 0 else 'text-red-600' }}">
-                            {{ "%.2f"|format(pnl_amount) }}
-                        </span>
-                        {% else %}
-                        <span class="text-gray-400">-</span>
-                        {% endif %}
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm" id="pct-{{ position.id }}">
-                        {% if position.current_price %}
-                        {% set pnl_pct = ((position.current_price - position.entry_price) / position.entry_price * 100) if position.entry_price > 0 else 0 %}
-                        <span class="{{ 'text-green-600 font-bold' if pnl_pct >= 0 else 'text-red-600 font-bold' }}">
-                            {{ "%+.1f%%"|format(pnl_pct) }}
-                        </span>
-                        {% else %}
-                        <span class="text-gray-400">-</span>
-                        {% endif %}
-                    </td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500">{{ position.quantity or '-' }}</td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm text-gray-500">{{ position.expiration_date }}</td>
-                    <td class="px-4 py-4 whitespace-nowrap text-sm">
-                        <button onclick="refreshPrice({{ position.id }})" class="text-blue-600 hover:text-blue-800 mr-3">
-                            刷新
-                        </button>
-                        <form action="/admin/positions/{{ position.id }}/delete" method="post" onsubmit="return confirm('确定删除此仓位？')" class="inline">
-                            <button type="submit" class="text-red-600 hover:text-red-800">删除</button>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="11" class="px-6 py-4 text-center text-gray-500">暂无仓位</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <!-- Positions Table -->
+    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
+        <div class="overflow-x-auto ios-scroll">
+            <table class="w-full min-w-[900px]">
+                <thead>
+                    <tr class="bg-gray-50/80 border-b border-gray-100 text-left">
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            标的/类型</th>
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            详情</th>
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            价格</th>
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            盈亏 (P&L)</th>
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            收益率</th>
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            数量</th>
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            操作</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for position in positions %}
+                    <tr id="position-{{ position.id }}" data-entry="{{ position.entry_price }}"
+                        data-quantity="{{ position.quantity or 1 }}"
+                        class="hover:bg-gray-50/60 transition-colors group">
+
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex items-center gap-2">
+                                <span class="text-sm font-bold text-gray-900">{{ position.underlying }}</span>
+                                <span
+                                    class="px-2 py-0.5 rounded text-xs font-medium {{ 'bg-red-50 text-red-700' if position.option_type == 'PUT' else 'bg-green-50 text-green-700' }}">
+                                    {{ position.option_type }}
+                                </span>
+                            </div>
+                        </td>
+
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex flex-col">
+                                <span class="text-sm font-medium text-gray-900">${{ position.strike_price }}</span>
+                                <span class="text-xs text-gray-400">{{ position.expiration_date }}</span>
+                            </div>
+                        </td>
+
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex flex-col">
+                                <span class="text-sm font-bold text-gray-900 transition-all duration-300"
+                                    id="price-{{ position.id }}">
+                                    {% if position.current_price %}
+                                    ${{ "%.2f"|format(position.current_price) }}
+                                    {% else %}
+                                    <span class="text-gray-400">-</span>
+                                    {% endif %}
+                                </span>
+                                <span class="text-xs text-gray-400">入场: ${{ position.entry_price }}</span>
+                            </div>
+                        </td>
+
+                        <td class="px-6 py-4 whitespace-nowrap" id="pnl-{{ position.id }}">
+                            {% if position.current_price %}
+                            {% set pnl_amount = (position.current_price - position.entry_price) * (position.quantity or
+                            1) * 100 %}
+                            <span
+                                class="text-sm font-medium {{ 'text-green-600' if pnl_amount >= 0 else 'text-red-500' }}">
+                                {{ "%+.2f"|format(pnl_amount) if pnl_amount >= 0 else "%.2f"|format(pnl_amount) }}
+                            </span>
+                            {% else %}
+                            <span class="text-gray-400">-</span>
+                            {% endif %}
+                        </td>
+
+                        <td class="px-6 py-4 whitespace-nowrap" id="pct-{{ position.id }}">
+                            {% if position.current_price %}
+                            {% set pnl_pct = ((position.current_price - position.entry_price) / position.entry_price *
+                            100) if position.entry_price > 0 else 0 %}
+                            <span
+                                class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold {{ 'bg-green-100 text-green-800' if pnl_pct >= 0 else 'bg-red-100 text-red-800' }}">
+                                {{ "%+.2f%%"|format(pnl_pct) }}
+                            </span>
+                            {% else %}
+                            <span class="text-gray-300">-</span>
+                            {% endif %}
+                        </td>
+
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ position.quantity or 1 }}
+                        </td>
+
+                        <td class="px-6 py-4 whitespace-nowrap text-sm">
+                            <div
+                                class="flex items-center gap-3 opacity-100 sm:opacity-60 group-hover:opacity-100 transition-opacity">
+                                <button onclick="refreshPrice({{ position.id }}, this)"
+                                    data-position-id="{{ position.id }}"
+                                    class="btn-refresh text-blue-600 hover:text-blue-800 font-medium text-xs bg-blue-50 px-2 py-1 rounded hover:bg-blue-100 transition">
+                                    刷新
+                                </button>
+                                <form action="/admin/positions/{{ position.id }}/delete" method="post"
+                                    onsubmit="return confirm('确定删除此仓位？')" class="inline">
+                                    <button type="submit" class="text-gray-400 hover:text-red-600 transition">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16">
+                                            </path>
+                                        </svg>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="7" class="px-6 py-12 text-center text-gray-400">
+                            <div class="flex flex-col items-center gap-2">
+                                <svg class="w-10 h-10 text-gray-300" fill="none" stroke="currentColor"
+                                    viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2">
+                                    </path>
+                                </svg>
+                                <p class="text-sm">暂无仓位数据</p>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
 <script>
-async function refreshPrice(positionId) {
-    const btn = event.target;
-    const originalText = btn.textContent;
-    btn.textContent = '...';
-    btn.disabled = true;
-
-    try {
-        const response = await fetch(`/admin/positions/${positionId}/refresh`, {
-            method: 'POST'
-        });
-        const data = await response.json();
-
-        if (data.success) {
-            document.getElementById(`price-${positionId}`).innerHTML = `$${data.current_price.toFixed(2)}`;
-            document.getElementById(`pnl-${positionId}`).innerHTML =
-                `<span class="${data.pnl_amount >= 0 ? 'text-green-600' : 'text-red-600'}">${data.pnl_amount.toFixed(2)}</span>`;
-            document.getElementById(`pct-${positionId}`).innerHTML =
-                `<span class="${data.pnl_pct >= 0 ? 'text-green-600 font-bold' : 'text-red-600 font-bold'}">${data.pnl_pct >= 0 ? '+' : ''}${data.pnl_pct.toFixed(1)}%</span>`;
+    // Pure calculation function
+    function calculatePnL(currentPrice, entryPrice, quantity) {
+        // Robust check for Finite numbers
+        if (!Number.isFinite(entryPrice) || entryPrice === 0 || !Number.isFinite(currentPrice)) {
+            return { amount: 0, pct: 0 };
         }
-    } catch (e) {
-        alert('刷新失败: ' + e);
+        const diff = currentPrice - entryPrice;
+        // Multiplier 100 for options
+        const amount = diff * (quantity || 1) * 100;
+        const pct = (diff / entryPrice) * 100;
+        return { amount, pct };
     }
 
-    btn.textContent = originalText;
-    btn.disabled = false;
-}
+    async function refreshPrice(positionId, btnElement) {
+        if (!btnElement) return;
 
-async function refreshAllPrices() {
-    const buttons = document.querySelectorAll('button[onclick^="refreshPrice"]');
-    for (const btn of buttons) {
-        const match = btn.onclick.toString().match(/refreshPrice\((\d+)\)/);
-        if (match) {
-            await refreshPrice(parseInt(match[1]));
+        // Prevent double entry
+        if (btnElement.dataset.loading === "1") return;
+        btnElement.dataset.loading = "1";
+
+        // Non-destructive text manipulation
+        // Try to find a span.btn-label, or fallback to the element itself but be careful
+        let labelEl = btnElement.querySelector('.btn-label');
+        // Fallback: If no wrapper span exists, treat the button itself as the text container
+        if (!labelEl) labelEl = btnElement;
+
+        const originalText = labelEl.textContent;
+
+        // UI state
+        btnElement.classList.add('opacity-50', 'cursor-not-allowed', 'pointer-events-none');
+        btnElement.disabled = true;
+
+        try {
+            const response = await fetch(`/admin/positions/${positionId}/refresh`, {
+                method: 'POST'
+            });
+            const data = await response.json();
+
+            // Default false, wait until DOM is actually updated
+            let success = false;
+
+            if (data.success) {
+                const currentPrice = parseFloat(data.current_price);
+
+                if (Number.isFinite(currentPrice)) {
+                    // DOM Safety Check
+                    const row = document.getElementById(`position-${positionId}`);
+                    // Only mark success if we actually found the row and have data
+                    if (row) {
+                        let entryPrice = parseFloat(row.dataset.entry);
+                        let quantity = parseFloat(row.dataset.quantity);
+                        if (isNaN(entryPrice)) entryPrice = 0;
+                        if (isNaN(quantity) || quantity <= 0) quantity = 1;
+
+                        const stats = calculatePnL(currentPrice, entryPrice, quantity);
+
+                        // Update Price - Check existence
+                        const priceEl = document.getElementById(`price-${positionId}`);
+                        if (priceEl) {
+                            priceEl.innerHTML = `$${currentPrice.toFixed(2)}`;
+                            priceEl.classList.add('text-blue-600', 'scale-110');
+                            setTimeout(() => priceEl.classList.remove('text-blue-600', 'scale-110'), 300);
+                        }
+
+                        // Update PnL Amount
+                        const pnlEl = document.getElementById(`pnl-${positionId}`);
+                        if (pnlEl) {
+                            pnlEl.innerHTML = `<span class="text-sm font-medium ${stats.amount >= 0 ? 'text-green-600' : 'text-red-500'}">
+                                ${stats.amount >= 0 ? '+' : ''}${stats.amount.toFixed(2)}
+                            </span>`;
+                        }
+
+                        // Update PnL %
+                        const pctEl = document.getElementById(`pct-${positionId}`);
+                        if (pctEl) {
+                            pctEl.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${stats.pct >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                                ${stats.pct >= 0 ? '+' : ''}${stats.pct.toFixed(2)}%
+                            </span>`;
+                        }
+
+                        // Only now we are sure visual update happened
+                        success = true;
+                    } else {
+                        console.warn(`Row not found for position ${positionId}`);
+                    }
+                } else {
+                    console.warn(`Invalid price format for position ${positionId}:`, data.current_price);
+                }
+            } else {
+                console.warn(`API Error for position ${positionId}: ` + (data.error || 'Unknown'));
+            }
+
+            // Visual Feedback Logic
+            labelEl.textContent = success ? '完成' : '失败';
+            setTimeout(() => labelEl.textContent = originalText, 1000);
+
+        } catch (e) {
+            console.error(e);
+            labelEl.textContent = '出错';
+            setTimeout(() => labelEl.textContent = originalText, 1000);
+        } finally {
+            // Reset UI state
+            delete btnElement.dataset.loading;
+            btnElement.classList.remove('opacity-50', 'cursor-not-allowed', 'pointer-events-none');
+            btnElement.disabled = false;
         }
     }
-}
+
+    async function refreshAllPrices() {
+        // Use specific class selector to avoid selecting delete buttons
+        const buttons = Array.from(document.querySelectorAll('.btn-refresh'));
+
+        if (buttons.length === 0) return;
+
+        const BATCH_SIZE = 3;
+
+        for (let i = 0; i < buttons.length; i += BATCH_SIZE) {
+            const chunk = buttons.slice(i, i + BATCH_SIZE);
+
+            await Promise.all(chunk.map(btn => {
+                const rawId = btn.getAttribute('data-position-id');
+                const positionId = parseInt(rawId, 10);
+
+                if (isNaN(positionId)) return Promise.resolve();
+
+                return refreshPrice(positionId, btn);
+            }));
+
+            if (i + BATCH_SIZE < buttons.length) {
+                await new Promise(r => setTimeout(r, 500));
+            }
+        }
+    }
 </script>
 {% endblock %}
