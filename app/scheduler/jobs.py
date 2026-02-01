@@ -40,18 +40,23 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
         # 2. 检查 QQQ 入场信号
         qqq_alerts = qqq_rules.check_all_qqq_rules(qqq_data, config)
 
-        # 3. 获取 VIX 指数（仅当有告警时）
-        vix_index = None
+        # 3. 获取 VIX 完整数据（仅当有告警时）
+        vix_data = {}
         if qqq_alerts:
-            vix_index = data_fetcher.get_vix_index()
+            vix_data = data_fetcher.get_vix_data()
 
         for alert in qqq_alerts:
-            # 添加 VIX 信息到 alert
-            alert["vix_index"] = vix_index
-            if vix_index is not None:
-                alert["vix_status"] = "✅ 小于28，处于低波动安全区" if vix_index < 28 else "⚠️ 大于28，处于高波动风险区"
+            # === 新增：动态 Delta 推荐（所有 Level 都执行）===
+            delta_rec = qqq_rules.recommend_delta_by_vix(vix_data)
+            alert["delta_recommendation"] = delta_rec
+            
+            # === 新增：恐慌加速度检测（仅 Level 2/3）===
+            alert_type = alert.get("alert_type", "")
+            if alert_type in ("QQQ_ENTRY_L2", "QQQ_ENTRY_L3"):
+                panic_result = qqq_rules.check_panic_acceleration(qqq_data, vix_data)
+                alert["panic_acceleration"] = panic_result
             else:
-                alert["vix_status"] = "获取失败"
+                alert["panic_acceleration"] = None
             
             # 使用 rule_name 进行去重
             if dedup.should_alert(alert["rule_name"]):

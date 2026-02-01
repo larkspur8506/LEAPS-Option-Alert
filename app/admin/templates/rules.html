@@ -46,8 +46,9 @@
                         endif %}
                         class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
                     <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">Level 2 (黄金坑)</strong>
+                        <strong class="block text-gray-900 font-medium mb-0.5">Level 2 (黄金坑) 🧨</strong>
                         3日累计跌幅 ≥ 3.5% 且 RSI &lt; 32
+                        <span class="block text-xs text-gray-400 mt-1">支持恐慌加速度检测</span>
                     </span>
                 </label>
 
@@ -57,8 +58,9 @@
                         endif %}
                         class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
                     <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">Level 3 (极端超卖)</strong>
+                        <strong class="block text-gray-900 font-medium mb-0.5">Level 3 (极端超卖) 🧨</strong>
                         价格跌破布林下轨
+                        <span class="block text-xs text-gray-400 mt-1">支持恐慌加速度检测</span>
                     </span>
                 </label>
             </div>
@@ -168,6 +170,69 @@
                         QQQ 有效跌破 MA200
                     </span>
                 </label>
+            </div>
+        </div>
+
+        <!-- Delta 推荐逻辑说明 -->
+        <div
+            class="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-indigo-100 p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2 bg-indigo-100 rounded-lg">
+                    <span class="text-xl">📊</span>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-900">动态 Delta 推荐逻辑</h2>
+                    <p class="text-sm text-gray-600">基于 VIX 比值的智能档位切换</p>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl p-4 space-y-3">
+                <p class="text-sm text-gray-700">
+                    系统根据 <strong>VIX / VIX_MA20</strong> 比值动态推荐 Delta 档位，以最小化波动率风险：
+                </p>
+
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-gray-200">
+                            <th class="text-left py-2 text-gray-600 font-medium">VIX 比值</th>
+                            <th class="text-left py-2 text-gray-600 font-medium">IV 区域</th>
+                            <th class="text-left py-2 text-gray-600 font-medium">Delta 推荐</th>
+                            <th class="text-left py-2 text-gray-600 font-medium">策略意图</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        <tr>
+                            <td class="py-2"><span
+                                    class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">≤
+                                    1.3</span></td>
+                            <td class="py-2 text-gray-700">安全区（低 IV）</td>
+                            <td class="py-2 font-mono text-blue-600">0.60 - 0.65</td>
+                            <td class="py-2 text-gray-600 text-xs">轻度 ITM，平衡时间价值与爆发力</td>
+                        </tr>
+                        <tr>
+                            <td class="py-2"><span
+                                    class="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">≤
+                                    1.5</span></td>
+                            <td class="py-2 text-gray-700">警告区（中 IV）</td>
+                            <td class="py-2 font-mono text-blue-600">0.70 - 0.75</td>
+                            <td class="py-2 text-gray-600 text-xs">适度 ITM，降低 Vega 风险</td>
+                        </tr>
+                        <tr>
+                            <td class="py-2"><span
+                                    class="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-medium">&gt;
+                                    1.5</span></td>
+                            <td class="py-2 text-gray-700">危险区（高 IV）</td>
+                            <td class="py-2 font-mono text-blue-600">≥ 0.85</td>
+                            <td class="py-2 text-gray-600 text-xs">Deep ITM，防护 IV Crush</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="bg-blue-50 border-l-4 border-blue-400 p-3 mt-3">
+                    <p class="text-xs text-blue-800">
+                        <strong>💡 提示：</strong>VIX 越高，系统越倾向于推荐更深价内的 Delta，以最小化波动率回归风险。
+                    </p>
+                </div>
             </div>
         </div>
 

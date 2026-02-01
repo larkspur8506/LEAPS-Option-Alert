@@ -225,13 +225,56 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     ).count()
 
     market_open = is_market_open_now()
+    
+    # Fetch real-time market data for market awareness widget
+    qqq_price = None
+    vix_current = None
+    vix_ma20 = None
+    vix_ratio = None
+    iv_zone = None
+    zone_color = "gray"
+    
+    if data_fetcher:
+        try:
+            # Get QQQ current price
+            qqq_data = data_fetcher.get_qqq_data()
+            if qqq_data and qqq_data.get("last_price"):
+                qqq_price = qqq_data["last_price"]
+            
+            # Get VIX data
+            vix_data = data_fetcher.get_vix_data()
+            if vix_data and vix_data.get("vix_current"):
+                vix_current = vix_data["vix_current"]
+                vix_ma20 = vix_data.get("vix_ma20")
+                vix_ratio = vix_data.get("vix_ratio")
+                
+                # Determine zone based on ratio
+                if vix_ratio:
+                    if vix_ratio <= 1.3:
+                        iv_zone = "安全区（低 IV）"
+                        zone_color = "green"
+                    elif vix_ratio <= 1.5:
+                        iv_zone = "警告区（中 IV）"
+                        zone_color = "yellow"
+                    else:
+                        iv_zone = "危险区（高 IV）"
+                        zone_color = "red"
+        except Exception as e:
+            print(f"Market data fetch error: {e}")
 
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "positions_count": positions_count,
         "today_logs": today_logs,
-        "market_open": market_open
+        "market_open": market_open,
+        "qqq_price": qqq_price,
+        "vix_current": vix_current,
+        "vix_ma20": vix_ma20,
+        "vix_ratio": vix_ratio,
+        "iv_zone": iv_zone,
+        "zone_color": zone_color
     })
+
 
 
 @app.get("/admin/positions", response_class=HTMLResponse)

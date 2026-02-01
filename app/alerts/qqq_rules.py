@@ -1,8 +1,138 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from pytz import timezone
 
 et_tz = timezone("America/New_York")
+
+
+def check_panic_acceleration(indicators: Dict, vix_data: Dict) -> Dict:
+    """
+    检测恐慌加速度（仅在 Level 2/3 信号触发时调用）
+    
+    满足任意 2/3 条件即判定为恐慌加速度成立
+    
+    条件 A: 成交量放大 - Volume > MA20(Volume) × 1.5
+    条件 B: 跌幅集中 - 最近 3 天中至少 2 天跌幅 ≤ -1.5%
+    条件 C: VIX 暴涨 - VIX 单日涨幅 ≥ +15% 或绝对涨幅 ≥ 3 点
+    
+    Returns:
+        Dict containing:
+        - is_panic: 是否满足恐慌加速度
+        - conditions_met: 满足条件数
+        - condition_a: (满足?, 描述)
+        - condition_b: (满足?, 描述)
+        - condition_c: (满足?, 描述)
+    """
+    conditions_met = 0
+    
+    # 条件 A: 成交量放大
+    volume = indicators.get("volume")
+    volume_ma20 = indicators.get("volume_ma20")
+    
+    if volume and volume_ma20 and volume_ma20 > 0:
+        volume_ratio = volume / volume_ma20
+        condition_a_met = volume_ratio > 1.5
+        condition_a_desc = f"{volume_ratio:.1f}x MA20"
+    else:
+        condition_a_met = False
+        condition_a_desc = "数据不可用"
+    
+    if condition_a_met:
+        conditions_met += 1
+    
+    # 条件 B: 跌幅集中
+    daily_changes = indicators.get("daily_changes", [])
+    days_with_big_drop = sum(1 for change in daily_changes if change <= -1.5)
+    total_days = len(daily_changes)
+    
+    if total_days >= 3:
+        condition_b_met = days_with_big_drop >= 2
+        condition_b_desc = f"{days_with_big_drop}/{total_days}天 跌>1.5%"
+    else:
+        condition_b_met = False
+        condition_b_desc = f"数据不足({total_days}天)"
+    
+    if condition_b_met:
+        conditions_met += 1
+    
+    # 条件 C: VIX 暴涨
+    vix_change_pct = vix_data.get("vix_change_pct", 0)
+    vix_change_abs = vix_data.get("vix_change_abs", 0)
+    
+    if vix_data:
+        condition_c_met = vix_change_pct >= 15 or vix_change_abs >= 3.0
+        condition_c_desc = f"+{vix_change_pct:.1f}% (+{vix_change_abs:.1f}点)"
+    else:
+        condition_c_met = False
+        condition_c_desc = "VIX数据不可用"
+    
+    if condition_c_met:
+        conditions_met += 1
+    
+    return {
+        "is_panic": conditions_met >= 2,
+        "conditions_met": conditions_met,
+        "condition_a": (condition_a_met, condition_a_desc),
+        "condition_b": (condition_b_met, condition_b_desc),
+        "condition_c": (condition_c_met, condition_c_desc)
+    }
+
+
+def recommend_delta_by_vix(vix_data: Dict) -> Dict:
+    """
+    基于 VIX/MA20 比值推荐 Delta 档位
+    
+    VIX_Ratio ≤ 1.3  → 安全区（低 IV）  → Delta 0.60-0.65
+    VIX_Ratio ≤ 1.5  → 警告区（中 IV）  → Delta 0.70-0.75
+    VIX_Ratio > 1.5  → 危险区（高 IV）  → Delta ≥ 0.85
+    
+    Returns:
+        Dict containing:
+        - vix_current: VIX 当前值
+        - vix_ma20: VIX MA20
+        - vix_ratio: VIX/MA20 比值
+        - iv_zone: IV 区域名称
+        - delta_recommend: Delta 推荐值
+        - explanation: 说明
+        - available: 数据是否可用
+    """
+    if not vix_data or not vix_data.get("vix_current"):
+        return {
+            "available": False,
+            "vix_current": None,
+            "vix_ma20": None,
+            "vix_ratio": None,
+            "iv_zone": "N/A",
+            "delta_recommend": "N/A",
+            "explanation": "VIX 数据不可用，建议默认 Delta 0.60"
+        }
+    
+    vix_current = vix_data["vix_current"]
+    vix_ma20 = vix_data["vix_ma20"]
+    vix_ratio = vix_data["vix_ratio"]
+    
+    if vix_ratio <= 1.3:
+        iv_zone = "安全区（低 IV）"
+        delta_recommend = "0.60 - 0.65"
+        explanation = "低 IV 环境，轻度 ITM 即可平衡时间价值与爆发力"
+    elif vix_ratio <= 1.5:
+        iv_zone = "警告区（中 IV）"
+        delta_recommend = "0.70 - 0.75"
+        explanation = "中等 IV 环境，适度 ITM 降低 Vega 风险"
+    else:
+        iv_zone = "危险区（高 IV）"
+        delta_recommend = "≥ 0.85"
+        explanation = "高 IV 环境，Deep ITM 最小化波动率风险（IV Crush 防护）"
+    
+    return {
+        "available": True,
+        "vix_current": vix_current,
+        "vix_ma20": vix_ma20,
+        "vix_ratio": vix_ratio,
+        "iv_zone": iv_zone,
+        "delta_recommend": delta_recommend,
+        "explanation": explanation
+    }
 
 
 def check_entry_signals(current_price: float, indicators: Dict, config) -> List[Dict]:

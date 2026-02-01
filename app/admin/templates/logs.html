@@ -17,12 +17,14 @@
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">类型</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">规则</th>
                     <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                 </tr>
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
                 {% for log in logs %}
                 <tr>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ log.triggered_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ log.triggered_at.strftime('%Y-%m-%d
+                        %H:%M:%S') }}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
                             {% if log.alert_type == 'QQQ_DROP' %}bg-blue-100 text-blue-800
@@ -35,19 +37,174 @@
                     <td class="px-6 py-4 text-sm text-gray-500">{{ log.rule_name }}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm">
                         {% if log.sent_successfully %}
-                            <span class="text-green-600">✓ 已发送</span>
+                        <span class="text-green-600">✓ 已发送</span>
                         {% else %}
-                            <span class="text-red-600">✗ 发送失败</span>
+                        <span class="text-red-600">✗ 发送失败</span>
                         {% endif %}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        <button onclick="showDetails({{ loop.index0 }})"
+                            class="text-blue-600 hover:text-blue-800 font-medium">
+                            查看详情
+                        </button>
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" class="px-6 py-4 text-center text-gray-500">暂无日志</td>
+                    <td colspan="5" class="px-6 py-4 text-center text-gray-500">暂无日志</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
+
+<!-- Details Modal -->
+<div id="detailsModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden">
+        <div class="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4 flex justify-between items-center">
+            <h3 class="text-xl font-bold text-white">信号详情</h3>
+            <button onclick="closeDetails()" class="text-white hover:text-gray-200 transition">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12">
+                    </path>
+                </svg>
+            </button>
+        </div>
+        <div id="detailsContent" class="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
+            <!-- Content will be dynamically inserted -->
+        </div>
+    </div>
+</div>
+
+<script>
+    const logsData = [
+        {% for log in logs %}
+    {
+        time: "{{ log.triggered_at.strftime('%Y-%m-%d %H:%M:%S') }}",
+            type: "{{ log.alert_type }}",
+                rule: "{{ log.rule_name }}",
+                    message: { { log.message | tojson | safe } },
+        success: { { 'true' if log.sent_successfully else 'false' } }
+    } {% if not loop.last %}, {% endif %}
+    {% endfor %}
+    ];
+
+    function showDetails(index) {
+        const log = logsData[index];
+        const modal = document.getElementById('detailsModal');
+        const content = document.getElementById('detailsContent');
+
+        let html = `
+            <div class="space-y-4">
+                <div class="bg-gray-50 rounded-lg p-4">
+                    <h4 class="font-semibold text-gray-700 mb-2">基本信息</h4>
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <div><span class="text-gray-500">时间：</span><span class="font-medium">${log.time}</span></div>
+                        <div><span class="text-gray-500">类型：</span><span class="font-medium">${log.type}</span></div>
+                        <div class="col-span-2"><span class="text-gray-500">规则：</span><span class="font-medium">${log.rule}</span></div>
+                    </div>
+                </div>
+        `;
+
+        // Parse message to extract panic and delta info
+        let panicInfo = null;
+        let deltaInfo = null;
+
+        // Try to extract panic acceleration from message
+        if (log.message.includes('恐慌加速度') || log.message.includes('🧨')) {
+            const panicMatch = log.message.match(/满足\s*(\d+)\/3\s*条件[：:]\s*([^\\n]+)/);
+            if (panicMatch) {
+                panicInfo = {
+                    count: panicMatch[1],
+                    conditions: panicMatch[2]
+                };
+            }
+        }
+
+        // Try to extract Delta recommendation
+        if (log.message.includes('Delta 推荐') || log.message.includes('VIX:')) {
+            const vixMatch = log.message.match(/VIX:\s*([\d.]+)\s*\(MA20=([\d.]+),\s*比值=([\d.]+)\)/);
+            const deltaMatch = log.message.match(/Delta 推荐:\s*([^\n]+)/);
+            const zoneMatch = log.message.match(/→\s*([^\\n]*(?:安全区|警告区|危险区)[^\\n]*)/);
+
+            if (vixMatch || deltaMatch) {
+                deltaInfo = {
+                    vix: vixMatch ? vixMatch[1] : 'N/A',
+                    ma20: vixMatch ? vixMatch[2] : 'N/A',
+                    ratio: vixMatch ? vixMatch[3] : 'N/A',
+                    delta: deltaMatch ? deltaMatch[1] : 'N/A',
+                    zone: zoneMatch ? zoneMatch[1] : ''
+                };
+            }
+        }
+
+        // Display panic acceleration info
+        if (panicInfo) {
+            html += `
+                <div class="bg-red-50 border-l-4 border-red-400 rounded-lg p-4">
+                    <h4 class="font-semibold text-red-800 mb-2 flex items-center gap-2">
+                        <span>🧨</span>恐慌加速度检测
+                    </h4>
+                    <div class="text-sm text-red-700">
+                        <p><strong>满足条件：</strong>${panicInfo.count}/3</p>
+                        <p class="mt-1">${panicInfo.conditions}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Display Delta recommendation info
+        if (deltaInfo) {
+            let zoneColor = 'green';
+            if (deltaInfo.zone.includes('警告区')) zoneColor = 'yellow';
+            if (deltaInfo.zone.includes('危险区')) zoneColor = 'red';
+
+            html += `
+                <div class="bg-${zoneColor}-50 border-l-4 border-${zoneColor}-400 rounded-lg p-4">
+                    <h4 class="font-semibold text-${zoneColor}-800 mb-2 flex items-center gap-2">
+                        <span>📊</span>Delta 推荐
+                    </h4>
+                    <div class="text-sm text-${zoneColor}-700 space-y-1">
+                        <p><strong>VIX 当前：</strong>${deltaInfo.vix}</p>
+                        <p><strong>VIX MA20：</strong>${deltaInfo.ma20}</p>
+                        <p><strong>比值：</strong>${deltaInfo.ratio}</p>
+                        <p><strong>推荐 Delta：</strong><span class="font-mono font-bold">${deltaInfo.delta}</span></p>
+                        ${deltaInfo.zone ? `<p class="mt-2 pt-2 border-t border-${zoneColor}-200"><strong>区域：</strong>${deltaInfo.zone}</p>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Display full message
+        html += `
+                <div class="bg-white border border-gray-200 rounded-lg p-4">
+                    <h4 class="font-semibold text-gray-700 mb-2">完整消息</h4>
+                    <pre class="text-xs text-gray-600 whitespace-pre-wrap font-mono bg-gray-50 p-3 rounded">${log.message}</pre>
+                </div>
+            </div>
+        `;
+
+        content.innerHTML = html;
+        modal.classList.remove('hidden');
+    }
+
+    function closeDetails() {
+        document.getElementById('detailsModal').classList.add('hidden');
+    }
+
+    // Close modal on outside click
+    document.getElementById('detailsModal').addEventListener('click', function (e) {
+        if (e.target === this) {
+            closeDetails();
+        }
+    });
+
+    // Close modal on Escape key
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            closeDetails();
+        }
+    });
+</script>
 {% endblock %}

@@ -188,6 +188,27 @@ class DataFetcher:
             else:
                 three_day_prev_close = float(df["Close"].iloc[0])
 
+            # === 恐慌加速度检测所需数据 ===
+            # 当日成交量
+            volume = float(latest["Volume"]) if "Volume" in df.columns and pd.notna(latest.get("Volume")) else None
+            
+            # 成交量 MA20
+            if "Volume" in df.columns and len(df) >= 20:
+                volume_ma20 = float(df["Volume"].rolling(window=20).mean().iloc[-1])
+            else:
+                volume_ma20 = None
+            
+            # 最近 3 天的每日涨跌幅 (用于跌幅集中检测)
+            daily_changes = []
+            for i in range(min(3, total_len - 1)):
+                idx = -(i + 1)  # -1, -2, -3
+                close_today = float(df["Close"].iloc[idx])
+                close_prev = float(df["Close"].iloc[idx - 1]) if abs(idx - 1) <= total_len else close_today
+                if close_prev > 0:
+                    change_pct = (close_today - close_prev) / close_prev * 100
+                    daily_changes.append(change_pct)
+            # daily_changes: [今天跌幅, 昨天跌幅, 前天跌幅]
+
             # 组装结果
             result = {
                 "date": datetime.now(et_tz).date(),
@@ -204,6 +225,11 @@ class DataFetcher:
                 # 历史参考
                 "prev_close": prev_close,
                 "three_day_prev_close": three_day_prev_close,
+                
+                # 恐慌加速度检测数据
+                "volume": volume,
+                "volume_ma20": volume_ma20,
+                "daily_changes": daily_changes,  # [今天, 昨天, 前天] 涨跌幅
                 
                 # 状态位
                 "is_degraded": is_degraded
@@ -378,3 +404,65 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"[ERROR] Failed to fetch VIX index: {e}")
             return None
+
+    @retry_on_failure(max_retries=2, delay=1.0)
+    def get_vix_data(self) -> Dict[str, Any]:
+        """
+        获取 VIX 完整数据，包括当前值、MA20、昨日收盘
+        
+        Returns:
+            Dict containing:
+            - vix_current: 当前 VIX 值
+            - vix_ma20: VIX 20 日均值
+            - vix_yesterday: 昨日 VIX 收盘价
+            - vix_ratio: VIX / MA20 比值
+            - vix_change_pct: VIX 单日涨跌幅 (%)
+            - vix_change_abs: VIX 单日绝对涨幅 (点)
+        """
+        try:
+            vix_ticker = yf.Ticker("^VIX")
+            # 获取至少 25 天数据确保能计算 MA20
+            vix_df = vix_ticker.history(period="1mo")
+            
+            if vix_df is None or len(vix_df) < 2:
+                logger.warning("[WARN] Insufficient VIX data for MA20 calculation")
+                return {}
+            
+            vix_df = vix_df.sort_index()
+            close_prices = vix_df["Close"]
+            
+            # 当前 VIX
+            vix_current = float(close_prices.iloc[-1])
+            
+            # 昨日 VIX
+            vix_yesterday = float(close_prices.iloc[-2])
+            
+            # VIX MA20 (如果数据不足 20 天，使用可用数据计算均值)
+            if len(close_prices) >= 20:
+                vix_ma20 = float(close_prices.rolling(window=20).mean().iloc[-1])
+            else:
+                vix_ma20 = float(close_prices.mean())
+                logger.info(f"[INFO] VIX MA20 calculated with {len(close_prices)} days (< 20)")
+            
+            # VIX 比值
+            vix_ratio = vix_current / vix_ma20 if vix_ma20 > 0 else 1.0
+            
+            # VIX 单日涨跌
+            vix_change_abs = vix_current - vix_yesterday
+            vix_change_pct = (vix_change_abs / vix_yesterday * 100) if vix_yesterday > 0 else 0.0
+            
+            result = {
+                "vix_current": vix_current,
+                "vix_ma20": vix_ma20,
+                "vix_yesterday": vix_yesterday,
+                "vix_ratio": vix_ratio,
+                "vix_change_pct": vix_change_pct,
+                "vix_change_abs": vix_change_abs
+            }
+            
+            logger.info(f"[OK] VIX data: current={vix_current:.2f}, MA20={vix_ma20:.2f}, ratio={vix_ratio:.2f}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"[ERROR] Failed to fetch VIX data: {e}")
+            return {}
