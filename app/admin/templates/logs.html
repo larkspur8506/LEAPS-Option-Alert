@@ -84,8 +84,8 @@
         time: "{{ log.triggered_at.strftime('%Y-%m-%d %H:%M:%S') }}",
             type: "{{ log.alert_type }}",
                 rule: "{{ log.rule_name }}",
-                    message: { { log.message | tojson | safe } },
-        success: { { 'true' if log.sent_successfully else 'false' } }
+                    message: {{ log.message | tojson | safe }},
+        success: {{ 'true' if log.sent_successfully else 'false' }}
     } {% if not loop.last %}, {% endif %}
     {% endfor %}
     ];
