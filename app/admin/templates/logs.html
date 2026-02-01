@@ -91,7 +91,9 @@
     ];
 
     function showDetails(index) {
-        const log = logsData[index];
+        let log = logsData[index];
+        if (!log.message) log.message = ""; // Handle null/undefined message for old logs
+
         const modal = document.getElementById('detailsModal');
         const content = document.getElementById('detailsContent');
 
