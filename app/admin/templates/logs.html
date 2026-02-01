@@ -97,8 +97,25 @@
         }
 
         try {
-            // Try to parse as JSON
-            const data = typeof message === 'string' ? JSON.parse(message) : message;
+            let data;
+            if (typeof message === 'string') {
+                // Try JSON format first
+                try {
+                    data = JSON.parse(message);
+                } catch (jsonErr) {
+                    // If JSON fails, try Python dict repr format (single quotes)
+                    // Replace single quotes with double quotes for property names and string values
+                    let fixed = message
+                        .replace(/'/g, '"')  // Replace all single quotes with double quotes
+                        .replace(/\bTrue\b/g, 'true')
+                        .replace(/\bFalse\b/g, 'false')
+                        .replace(/\bNone\b/g, 'null')
+                        .replace(/datetime\.datetime\([^)]+\)/g, '""');  // Remove datetime objects
+                    data = JSON.parse(fixed);
+                }
+            } else {
+                data = message;
+            }
             
             // Format different types of alerts
             if (data.alert_type && data.alert_type.includes('ENTRY')) {

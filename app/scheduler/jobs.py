@@ -1,6 +1,7 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime
+import json
 import logging
 import time
 
@@ -159,7 +160,7 @@ def _log_alert(db, alert: dict, success: bool):
     alert_log = AlertLog(
         alert_type=alert.get("alert_type", "QQQ_DROP"),
         rule_name=alert.get("rule_name", ""),
-        message=str(alert),
+        message=json.dumps(alert, default=str),
         sent_successfully=success,
         position_id=alert.get("position_id")
     )
