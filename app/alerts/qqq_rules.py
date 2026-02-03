@@ -163,15 +163,16 @@ def check_entry_signals(current_price: float, indicators: Dict, config) -> List[
 
     # 2. 分级信号
     
-    # Level 1: 轻度回调
+        # Level 1: 轻度回调
     if config.is_entry_level1_enabled():
-        dist_ma20_pct = abs(current_price - ma20) / ma20 * 100
+        # 修改为：只要价格低于 MA20 + 0.5% 均视为入场区间（即包含所有跌破 MA20 的情况）
+        price_vs_ma20_pct = (current_price - ma20) / ma20 * 100
         
-        if daily_drop_pct <= -1.2 and dist_ma20_pct <= 0.5:
+        if daily_drop_pct <= -1.2 and price_vs_ma20_pct <= 0.5:
             alerts.append({
                 "rule_name": "Level 1 Entry",
-                "message": f"{bear_prefix}🟢 [日常回调] 跌幅 {daily_drop_pct:.2f}%, 触碰 MA20",
-                "trigger_condition": f"跌幅 {daily_drop_pct:.2f}% <= -1.2% AND MA20距离 {dist_ma20_pct:.2f}% <= 0.5%",
+                "message": f"{bear_prefix}🟢 [日常回调] 跌幅 {daily_drop_pct:.2f}%, 价格低于/接近 MA20",
+                "trigger_condition": f"跌幅 {daily_drop_pct:.2f}% <= -1.2% AND 价格/MA20 {price_vs_ma20_pct:.2f}% <= 0.5%",
                 "severity": "LOW",
                 "alert_type": "QQQ_ENTRY_L1",
                 "current_price": current_price,
