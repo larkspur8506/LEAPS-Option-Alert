@@ -179,32 +179,32 @@ def check_entry_signals(current_price: float, indicators: Dict, config) -> List[
                 "drop_percent": daily_drop_pct
             })
 
-    # Level 2: 黄金坑
+    # Level 2: 极端超卖 (原 Level 3) - 较易触发
     if config.is_entry_level2_enabled():
+        if current_price < bb_lower:
+            alerts.append({
+                "rule_name": "Level 2 Entry",
+                "message": f"{bear_prefix}📉 [极端超卖] 价格跌破布林下轨",
+                "trigger_condition": f"价格 {current_price:.2f} < BB Lower {bb_lower:.2f}",
+                "severity": "HIGH",
+                "alert_type": "QQQ_ENTRY_L2",
+                "current_price": current_price,
+                "drop_percent": daily_drop_pct
+            })
+
+    # Level 3: 黄金坑 (原 Level 2) - 较难触发
+    if config.is_entry_level3_enabled():
         three_day_drop_pct = (current_price - three_day_prev_close) / three_day_prev_close * 100
         
         if three_day_drop_pct <= -3.5 and rsi < 32:
             alerts.append({
-                "rule_name": "Level 2 Entry",
+                "rule_name": "Level 3 Entry",
                 "message": f"{bear_prefix}🚨 [黄金坑机会] 3日跌幅 {three_day_drop_pct:.2f}%, RSI {rsi:.1f}",
                 "trigger_condition": f"3日跌幅 {three_day_drop_pct:.2f}% <= -3.5% AND RSI {rsi:.1f} < 32",
-                "severity": "HIGH",
-                "alert_type": "QQQ_ENTRY_L2",
-                "current_price": current_price,
-                "drop_percent": three_day_drop_pct
-            })
-
-    # Level 3: 极端超卖
-    if config.is_entry_level3_enabled():
-        if current_price < bb_lower:
-            alerts.append({
-                "rule_name": "Level 3 Entry",
-                "message": f"{bear_prefix}📉 [极端超卖] 价格跌破布林下轨",
-                "trigger_condition": f"价格 {current_price:.2f} < BB Lower {bb_lower:.2f}",
                 "severity": "CRITICAL",
                 "alert_type": "QQQ_ENTRY_L3",
                 "current_price": current_price,
-                "drop_percent": daily_drop_pct
+                "drop_percent": three_day_drop_pct
             })
 
     # Add timestamp to all
