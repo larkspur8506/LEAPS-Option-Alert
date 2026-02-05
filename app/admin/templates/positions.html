@@ -107,6 +107,9 @@
                             详情</th>
                         <th
                             class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                            时间管理</th>
+                        <th
+                            class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                             价格</th>
                         <th
                             class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
@@ -147,6 +150,17 @@
 
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex flex-col">
+                                <span class="text-sm font-medium text-gray-900">{{ position.entry_date }}</span>
+                                {% set days_left = (position.expiration_date - today).days %}
+                                <span
+                                    class="text-xs font-medium {{ 'text-red-600' if days_left < 30 else 'text-yellow-600' if days_left < 90 else 'text-green-600' }}">
+                                    剩余 {{ days_left }} 天
+                                </span>
+                            </div>
+                        </td>
+
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div class="flex flex-col">
                                 <span class="text-sm font-bold text-gray-900 transition-all duration-300"
                                     id="price-{{ position.id }}">
                                     {% if position.current_price %}
@@ -180,6 +194,13 @@
                                 class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold {{ 'bg-green-100 text-green-800' if pnl_pct >= 0 else 'bg-red-100 text-red-800' }}">
                                 {{ "%+.2f%%"|format(pnl_pct) }}
                             </span>
+                            <div id="max-pnl-{{ position.id }}" class="mt-1">
+                                {% if position.max_profit and position.max_profit > 0 %}
+                                <span class="text-[10px] text-gray-400 block whitespace-nowrap">
+                                    最高: +{{ "%.1f"|format(position.max_profit * 100) }}%
+                                </span>
+                                {% endif %}
+                            </div>
                             {% else %}
                             <span class="text-gray-300">-</span>
                             {% endif %}
@@ -212,7 +233,7 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="7" class="px-6 py-12 text-center text-gray-400">
+                        <td colspan="8" class="px-6 py-12 text-center text-gray-400">
                             <div class="flex flex-col items-center gap-2">
                                 <svg class="w-10 h-10 text-gray-300" fill="none" stroke="currentColor"
                                     viewBox="0 0 24 24">
@@ -309,7 +330,13 @@
                         if (pctEl) {
                             pctEl.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${stats.pct >= 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
                                 ${stats.pct >= 0 ? '+' : ''}${stats.pct.toFixed(2)}%
-                            </span>`;
+                            </span>
+                            <div id="max-pnl-${positionId}" class="mt-1">
+                                ${data.max_profit_pct > 0 ? `
+                                <span class="text-[10px] text-gray-400 block whitespace-nowrap">
+                                    最高: +${data.max_profit_pct.toFixed(1)}%
+                                </span>` : ''}
+                            </div>`;
                         }
 
                         // Only now we are sure visual update happened

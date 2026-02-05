@@ -283,10 +283,12 @@ async def positions(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/admin/login", status_code=302)
 
     positions = db.query(OptionPosition).order_by(OptionPosition.created_at.desc()).all()
+    today = get_current_time_et().date()
 
     return templates.TemplateResponse("positions.html", {
         "request": request,
-        "positions": positions
+        "positions": positions,
+        "today": today
     })
 
 
@@ -324,7 +326,7 @@ async def add_position(
             strike_price=strike_price,
             expiration_date=exp_date_obj,
             entry_price=entry_price,
-            quantity=quantity,
+            quantity=quantity if quantity and quantity > 0 else 1,
             entry_date=date.fromisoformat(entry_date)
         )
 
@@ -383,11 +385,20 @@ async def refresh_position_price(
             pnl_amount = (current_price - position.entry_price) * (position.quantity or 1) * 100
             pnl_pct = ((current_price - position.entry_price) / position.entry_price * 100) if position.entry_price > 0 else 0
 
+            # Update max_profit if current PnL is higher
+            # Note: We store max_profit as a decimal (e.g. 0.50 for 50%), but pnl_pct here is for UI (e.g. 50.0)
+            # Database stores decimal format for calculation rules
+            current_pnl_decimal = pnl_pct / 100.0
+            if current_pnl_decimal > (position.max_profit or 0.0):
+                position.max_profit = current_pnl_decimal
+                db.commit()
+
             return {
                 "success": True,
                 "current_price": current_price,
                 "pnl_amount": pnl_amount,
-                "pnl_pct": pnl_pct
+                "pnl_pct": pnl_pct,
+                "max_profit_pct": (position.max_profit or 0.0) * 100
             }
         else:
             return {"success": False, "error": "Failed to fetch price"}

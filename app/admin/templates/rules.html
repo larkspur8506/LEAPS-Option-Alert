@@ -4,15 +4,17 @@
 
 {% block content %}
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <div class="flex justify-between items-center mb-8">
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
         <div>
             <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">规则配置</h1>
             <p class="text-sm text-gray-500 mt-1">定制您的交易提醒策略</p>
         </div>
-        <a href="/admin"
-            class="flex-1 sm:flex-none bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all text-center">
-            返回 Dashboard
-        </a>
+        <div class="flex gap-3 w-full sm:w-auto">
+            <a href="/admin"
+                class="flex-1 sm:flex-none bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all text-center">
+                返回 Dashboard
+            </a>
+        </div>
     </div>
 
     <form action="/admin/rules" method="post" class="space-y-6">
@@ -244,3 +246,4 @@
     </form>
 </div>
 {% endblock %}
+```
