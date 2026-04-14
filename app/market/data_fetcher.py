@@ -40,6 +40,10 @@ class DataFetcher:
         self.polygon = polygon_client
         self.yfinance = YFinanceClient()
         self.db = db
+        
+        # 缓存机制，避免频繁请求 yfinance 导致被封禁
+        self._qqq_cache = None
+        self._qqq_cache_time = 0.0
 
     def get_qqq_data(self) -> Dict[str, Any]:
         """
@@ -49,6 +53,22 @@ class DataFetcher:
         Level 1 (yfinance): 获取完整历史数据计算。
         Level 2 (Polygon 灾备): 获取历史聚合数据重构 DataFrame，并打入实时最新价。
         """
+        from app.scheduler.trading_hours import is_market_open_now
+        
+        current_time = time.time()
+        
+        # 智能防封禁缓存逻辑
+        if self._qqq_cache:
+            # 判断当前美股是否开盘
+            if not is_market_open_now():
+                # 如果是休市时间，直接返回内存中的最后一次历史数据，永远不发起网络请求
+                logger.debug("[CACHE] Market is closed, using permanent cached QQQ data")
+                return self._qqq_cache
+            elif current_time - self._qqq_cache_time < 60:
+                # 如果是开盘时间，则维持 60 秒的防抖缓存，避免浏览器疯狂刷新
+                logger.debug("[CACHE] Market is open, using 60s cached QQQ data")
+                return self._qqq_cache
+
         df = None
         
         # ---------------------------------------------------------
@@ -134,7 +154,12 @@ class DataFetcher:
         # Process DataFrame
         # ---------------------------------------------------------
         if df is not None and not df.empty:
-            return self._process_qqq_df(df)
+            result = self._process_qqq_df(df)
+            # 存储缓存
+            if result:
+                self._qqq_cache = result
+                self._qqq_cache_time = current_time
+            return result
             
         return {}
 
