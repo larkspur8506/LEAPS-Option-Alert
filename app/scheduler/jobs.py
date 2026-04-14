@@ -41,26 +41,9 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
         # 2. 检查 QQQ 入场信号
         qqq_alerts = qqq_rules.check_all_qqq_rules(qqq_data, config)
 
-        # 3. 获取 VIX 完整数据（仅当有告警时）
-        vix_data = {}
-        if qqq_alerts:
-            vix_data = data_fetcher.get_vix_data()
-
         for alert in qqq_alerts:
-            # === 新增：动态 Delta 推荐（所有 Level 都执行）===
-            delta_rec = qqq_rules.recommend_delta_by_vix(vix_data)
-            alert["delta_recommendation"] = delta_rec
-            
-            # === 新增：恐慌加速度检测（仅 Level 2/3）===
-            alert_type = alert.get("alert_type", "")
-            if alert_type in ("QQQ_ENTRY_L2", "QQQ_ENTRY_L3"):
-                panic_result = qqq_rules.check_panic_acceleration(qqq_data, vix_data)
-                alert["panic_acceleration"] = panic_result
-            else:
-                alert["panic_acceleration"] = None
-            
-            # 使用 rule_name 进行去重
-            if dedup.should_alert(alert["rule_name"]):
+            # 使用 rule_name 进行每周去重 (每周最多一次买入指令)
+            if dedup.should_alert_weekly(alert["rule_name"]):
                 success = notifier.send_qqq_alert(alert)
                 _log_alert(db, alert, success)
 
@@ -87,7 +70,6 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
             logger.debug(f"Updated price for {position_ticker} to ${current_price:.2f}")
             
             # 2. 检查出场/风控信号
-            # check_position_signals 返回 {'alerts':List, 'new_max_profit':float}
             result = option_rules.check_position_signals(position, current_price, qqq_data, config)
             
             # 3. 更新 max_profit
@@ -112,7 +94,7 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
                     _log_alert(db, alert, success)
                     logger.info(f"Alert sent for {position_ticker}: {rule_name}")
 
-            # 5. 性能优化：API 频率限制，避免对 Yahoo/Polygon 造成压力
+            # 5. 性能优化：API 频率限制
             time.sleep(1.0)
 
         except Exception as e:
@@ -155,7 +137,6 @@ def cleanup_old_data(db, config):
 
 def _log_alert(db, alert: dict, success: bool):
     from app.database.models import AlertLog
-    from sqlalchemy import or_
 
     alert_log = AlertLog(
         alert_type=alert.get("alert_type", "QQQ_DROP"),

@@ -19,7 +19,6 @@ class WeChatNotifier:
     def _format_qqq_alert(self, alert: Dict) -> str:
         timestamp = alert.get("timestamp", datetime.now())
         time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S") if isinstance(timestamp, datetime) else str(timestamp)
-        drop_pct = alert.get("drop_percent", 0)
         current_price = alert.get("trigger_price", alert.get("current_price", 0))
         
         # 基础信息
@@ -27,57 +26,29 @@ class WeChatNotifier:
         message = alert.get('message', '')
         trigger_condition = alert.get('trigger_condition', '')
         
-        # === 恐慌加速度标签（仅 Level 2/3）===
-        panic_data = alert.get("panic_acceleration")
-        panic_label = ""
-        panic_section = ""
-        
-        if panic_data and panic_data.get("is_panic"):
-            panic_label = " 🧨 [恐慌加速度]"
-        
-        if panic_data:
-            cond_a = panic_data.get("condition_a", (False, ""))
-            cond_b = panic_data.get("condition_b", (False, ""))
-            cond_c = panic_data.get("condition_c", (False, ""))
-            conditions_met = panic_data.get("conditions_met", 0)
-            
-            panic_section = f"""
-恐慌加速度检测（满足 {conditions_met}/3 条件）:
-{"✅" if cond_a[0] else "❌"} 成交量: {cond_a[1]}
-{"✅" if cond_b[0] else "❌"} 跌幅集中: {cond_b[1]}
-{"✅" if cond_c[0] else "❌"} VIX暴涨: {cond_c[1]}
-"""
-        
-        # === 动态 Delta 推荐 ===
+        # 期权建仓指引
         delta_rec = alert.get("delta_recommendation", {})
-        
+        delta_section = ""
         if delta_rec.get("available"):
-            vix_current = delta_rec.get("vix_current", 0)
-            vix_ma20 = delta_rec.get("vix_ma20", 0)
-            vix_ratio = delta_rec.get("vix_ratio", 0)
-            iv_zone = delta_rec.get("iv_zone", "")
             delta_recommend = delta_rec.get("delta_recommend", "")
+            expiration = delta_rec.get("expiration", "")
             explanation = delta_rec.get("explanation", "")
             
-            delta_section = f"""VIX: {vix_current:.1f} (MA20={vix_ma20:.1f}, 比值={vix_ratio:.2f}) → {iv_zone}
-Delta 推荐: {delta_recommend}
-说明: {explanation}"""
-        else:
-            explanation = delta_rec.get("explanation", "VIX 数据不可用")
-            delta_section = f"VIX: N/A → Delta 推荐: N/A ({explanation})"
-        
-        return f"""【QQQ 跌幅提醒】
+            delta_section = f"""
+【期权建仓指引】
+到期日要求: {expiration}
+Delta 要求: {delta_recommend}
+策略说明: {explanation}"""
 
-规则: {rule_name}{panic_label}
+        return f"""【QQQ 长期复利引擎 - 入场信号】
+
+规则: {rule_name}
 
 {message}
 
 触发条件: {trigger_condition}
 
-当前价: ${current_price:.2f}
-
-跌幅: {drop_pct:.2f}%
-{panic_section}
+QQQ 当前价: ${current_price:.2f}
 {delta_section}
 
 时间: {time_str}"""
@@ -116,7 +87,7 @@ Delta 推荐: {delta_recommend}
         entry_price = alert.get('entry_price', 0)
         current_price = alert.get('current_price', 0)
 
-        return f"""【期权止盈提醒】
+        return f"""【期权阶梯止盈提醒】
 
 标的: {position_ticker}
 
@@ -149,15 +120,15 @@ Delta 推荐: {delta_recommend}
         dte = alert.get('dte', 0)
         expiration_date = alert.get('expiration_date', '')
 
-        return f"""【期权时间风险提醒】
+        return f"""【期权强制平仓提醒】
 
 标的: {position_ticker}
 
-距离到期: {dte} 天
+距离到期: {dte} 天 (<=180天)
 
 到期日: {expiration_date}
 
-请注意期权的时间价值衰减风险"""
+触发红线风控：请立即平仓以规避期权末期加速的时间价值衰减（Theta Decay）！"""
 
     def _send_message(self, message: str) -> bool:
         if not self.webhook_url:

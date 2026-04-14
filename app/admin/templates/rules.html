@@ -6,8 +6,8 @@
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
         <div>
-            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">规则配置</h1>
-            <p class="text-sm text-gray-500 mt-1">定制您的交易提醒策略</p>
+            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">策略规则 (长期复利引擎)</h1>
+            <p class="text-sm text-gray-500 mt-1">当前系统已锁定为严格的 QQQ LEAPS 长期复利引擎策略</p>
         </div>
         <div class="flex gap-3 w-full sm:w-auto">
             <a href="/admin"
@@ -17,54 +17,42 @@
         </div>
     </div>
 
-    <form action="/admin/rules" method="post" class="space-y-6">
-        <!-- QQQ 入场规则 (新版 Level 1/2/3) -->
+    <div class="space-y-6">
+        <!-- QQQ 入场规则 -->
         <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
             <div class="flex items-center gap-3 mb-4">
                 <div class="p-2 bg-green-50 rounded-lg">
                     <span class="text-xl">🟢</span>
                 </div>
                 <div>
-                    <h2 class="text-lg font-bold text-gray-900">QQQ 入场规则</h2>
-                    <p class="text-sm text-gray-500">分级入场提醒设置</p>
+                    <h2 class="text-lg font-bold text-gray-900">入场逻辑 (Entry Signals)</h2>
+                    <p class="text-sm text-gray-500">超卖买入与频率控制</p>
                 </div>
             </div>
 
             <div class="space-y-4 pl-0 sm:pl-14">
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="entry_level1_enabled" {% if config.entry_level1_enabled %}checked{%
-                        endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">Level 1 (日常回调)</strong>
-                        跌幅 ≥ 1.2% 且价格低于或接近 MA20
-                    </span>
-                </label>
+                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                    <h3 class="font-medium text-gray-900 mb-2">1. 技术指标触发</h3>
+                    <p class="text-sm text-gray-600">
+                        监控日线级别 <strong>RSI (14)</strong>。当 RSI 跌破 <strong>35</strong> 时，代表市场进入超卖区/恐慌期，系统将触发买入提醒。
+                    </p>
+                </div>
+                
+                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                    <h3 class="font-medium text-gray-900 mb-2">2. 执行频率限制 (Frequency Gate)</h3>
+                    <p class="text-sm text-gray-600">
+                        为平摊成本，系统自动控制每周最多只允许触发 <strong>一次</strong> 买入指令。
+                    </p>
+                </div>
 
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="entry_level2_enabled" {% if config.entry_level2_enabled %}checked{%
-                        endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">Level 2 (极端超卖) 🧨</strong>
-                        价格跌破布林下轨
-                        <span class="block text-xs text-gray-400 mt-1">支持恐慌加速度检测</span>
-                    </span>
-                </label>
-
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="entry_level3_enabled" {% if config.entry_level3_enabled %}checked{%
-                        endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">Level 3 (黄金坑) 🧨</strong>
-                        3日累计跌幅 ≥ 3.5% 且 RSI &lt; 32
-                        <span class="block text-xs text-gray-400 mt-1">支持恐慌加速度检测</span>
-                    </span>
-                </label>
+                <div class="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                    <h3 class="font-medium text-blue-900 mb-2">💡 期权筛选标准</h3>
+                    <ul class="text-sm text-blue-800 list-disc list-inside space-y-1">
+                        <li><strong>底层资产：</strong> QQQ (Nasdaq 100 ETF)</li>
+                        <li><strong>到期日：</strong> 选择距离现在约 2 年（730天左右）到期的合约</li>
+                        <li><strong>Delta 值：</strong> 选择深度实值，Delta 接近 0.7 的期权</li>
+                    </ul>
+                </div>
             </div>
         </div>
 
@@ -75,55 +63,28 @@
                     <span class="text-xl">🎯</span>
                 </div>
                 <div>
-                    <h2 class="text-lg font-bold text-gray-900">期权止盈规则</h2>
-                    <p class="text-sm text-gray-500">多维止盈提醒设置</p>
+                    <h2 class="text-lg font-bold text-gray-900">出场逻辑 (Exit / Profit Taking)</h2>
+                    <p class="text-sm text-gray-500">严格执行阶梯止盈</p>
                 </div>
             </div>
 
             <div class="space-y-4 pl-0 sm:pl-14">
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="exit_hard_tp_enabled" {% if config.exit_hard_tp_enabled %}checked{%
-                        endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">阶梯止盈</strong>
-                        4个月(50%) / 5-6个月(30%) / 7个月+(10%)
-                    </span>
-                </label>
-
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="exit_fast_tp_enabled" {% if config.exit_fast_tp_enabled %}checked{%
-                        endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">极速止盈 (Rocket)</strong>
-                        持仓 ≤ 7天且盈利达到 15%
-                    </span>
-                </label>
-
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="exit_trailing_tp_enabled" {% if config.exit_trailing_tp_enabled
-                        %}checked{% endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">移动止盈</strong>
-                        最高收益 &gt; 30% 后回撤超过 10%
-                    </span>
-                </label>
-
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="exit_tech_tp_enabled" {% if config.exit_tech_tp_enabled %}checked{%
-                        endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">技术止盈</strong>
-                        QQQ RSI &gt; 75 或突破布林上轨
-                    </span>
-                </label>
+                <p class="text-sm text-gray-700 mb-2">系统将基于您在“仓位管理”中录入的期权数据（买入时间和成本），动态计算并监控以下止盈目标：</p>
+                
+                <div class="grid gap-3">
+                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
+                        <span class="text-gray-700 text-sm">持有期 <strong>&lt; 12 个月</strong></span>
+                        <span class="px-3 py-1 bg-green-100 text-green-700 font-bold rounded text-sm">利润 100% 止盈</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
+                        <span class="text-gray-700 text-sm">持有期 <strong>12 - 15 个月</strong></span>
+                        <span class="px-3 py-1 bg-blue-100 text-blue-700 font-bold rounded text-sm">利润 50% 止盈</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
+                        <span class="text-gray-700 text-sm">持有期 <strong>16 - 18 个月</strong></span>
+                        <span class="px-3 py-1 bg-purple-100 text-purple-700 font-bold rounded text-sm">利润 30% 止盈</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -134,116 +95,21 @@
                     <span class="text-xl">🛡️</span>
                 </div>
                 <div>
-                    <h2 class="text-lg font-bold text-gray-900">期权风控规则</h2>
-                    <p class="text-sm text-gray-500">风险控制与强制平仓设置</p>
+                    <h2 class="text-lg font-bold text-gray-900">强制止损与时间风控 (Hard Stop)</h2>
+                    <p class="text-sm text-gray-500">规避 Theta 加速衰减</p>
                 </div>
             </div>
 
             <div class="space-y-4 pl-0 sm:pl-14">
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="exit_dte_warning_enabled" {% if config.exit_dte_warning_enabled
-                        %}checked{% endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">移仓窗口</strong>
-                        DTE &lt; 120 天提醒
-                    </span>
-                </label>
-
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="exit_dte_force_enabled" {% if config.exit_dte_force_enabled %}checked{%
-                        endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">强制清仓</strong>
-                        DTE &lt; 90 天提醒
-                    </span>
-                </label>
-
-                <label
-                    class="flex items-start gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer border border-transparent hover:border-gray-100">
-                    <input type="checkbox" name="exit_trend_stop_enabled" {% if config.exit_trend_stop_enabled
-                        %}checked{% endif %}
-                        class="mt-1 w-5 h-5 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-2 transition-all">
-                    <span class="text-gray-700 text-sm leading-relaxed">
-                        <strong class="block text-gray-900 font-medium mb-0.5">趋势崩坏</strong>
-                        QQQ 有效跌破 MA200
-                    </span>
-                </label>
-            </div>
-        </div>
-
-        <!-- Delta 推荐逻辑说明 -->
-        <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
-            <div class="flex items-center gap-3 mb-4">
-                <div class="p-2 bg-blue-50 rounded-lg">
-                    <span class="text-xl">📊</span>
-                </div>
-                <div>
-                    <h2 class="text-lg font-bold text-gray-900">动态 Delta 推荐逻辑</h2>
-                    <p class="text-sm text-gray-500">基于 VIX 比值的智能档位切换</p>
-                </div>
-            </div>
-
-            <div class="space-y-4 pl-0 sm:pl-14">
-                <p class="text-sm text-gray-700">
-                    系统根据 <strong>VIX / VIX_MA20</strong> 比值动态推荐 Delta 档位，以最小化波动率风险：
-                </p>
-
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-gray-200">
-                            <th class="text-left py-2 text-gray-600 font-medium">VIX 比值</th>
-                            <th class="text-left py-2 text-gray-600 font-medium">IV 区域</th>
-                            <th class="text-left py-2 text-gray-600 font-medium">Delta 推荐</th>
-                            <th class="text-left py-2 text-gray-600 font-medium">策略意图</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-100">
-                        <tr>
-                            <td class="py-2"><span
-                                    class="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-medium">≤
-                                    1.3</span></td>
-                            <td class="py-2 text-gray-700">安全区（低 IV）</td>
-                            <td class="py-2 font-mono text-blue-600">0.60 - 0.65</td>
-                            <td class="py-2 text-gray-600 text-xs">轻度 ITM，平衡时间价值与爆发力</td>
-                        </tr>
-                        <tr>
-                            <td class="py-2"><span
-                                    class="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs font-medium">≤
-                                    1.5</span></td>
-                            <td class="py-2 text-gray-700">警告区（中 IV）</td>
-                            <td class="py-2 font-mono text-blue-600">0.70 - 0.75</td>
-                            <td class="py-2 text-gray-600 text-xs">适度 ITM，降低 Vega 风险</td>
-                        </tr>
-                        <tr>
-                            <td class="py-2"><span
-                                    class="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-medium">&gt;
-                                    1.5</span></td>
-                            <td class="py-2 text-gray-700">危险区（高 IV）</td>
-                            <td class="py-2 font-mono text-blue-600">≥ 0.85</td>
-                            <td class="py-2 text-gray-600 text-xs">Deep ITM，防护 IV Crush</td>
-                        </tr>
-                    </tbody>
-                </table>
-
-                <div class="bg-blue-50 border-l-4 border-blue-400 p-3 mt-3">
-                    <p class="text-xs text-blue-800">
-                        <strong>💡 提示：</strong>VIX 越高，系统越倾向于推荐更深价内的 Delta，以最小化波动率回归风险。
+                <div class="p-4 bg-red-50 rounded-xl border border-red-100">
+                    <h3 class="font-medium text-red-900 mb-2">⏳ 时间止损 (Time Stop)</h3>
+                    <p class="text-sm text-red-800">
+                        当期权合约距离到期日仅剩 <strong>6 个月 (约 180 天)</strong> 时，无论当前盈亏状态如何，系统均会触发强制平仓报警，以规避期权末期加速的时间价值衰减（Theta Decay）。
                     </p>
                 </div>
             </div>
         </div>
-
-        <div class="sticky bottom-4 z-10 flex justify-end">
-            <button type="submit"
-                class="bg-blue-600 text-white py-3 px-8 rounded-xl hover:bg-blue-700 active:scale-95 transition-all font-bold shadow-lg shadow-blue-500/30">
-                保存配置
-            </button>
-        </div>
-    </form>
+    </div>
 </div>
 {% endblock %}
 ```

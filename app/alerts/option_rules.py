@@ -9,10 +9,7 @@ logger = logging.getLogger(__name__)
 
 def check_position_signals(position, current_opt_price: float, qqq_indicators: Dict, config=None) -> Dict[str, Any]:
     """
-    重构后的期权出场/风控规则
-    根据 config 开关决定是否生成对应规则的信号
-    
-    返回值: {'alerts': [], 'new_max_profit': float}
+    重构后的期权出场/风控规则 - 长期复利引擎
     """
     alerts = []
     
@@ -44,116 +41,51 @@ def check_position_signals(position, current_opt_price: float, qqq_indicators: D
         logger.error(f"Error preparing data for position {position.id}: {e}")
         return {'alerts': [], 'new_max_profit': 0.0}
 
-    # Helper: 检查开关是否启用 (兼容 config 为 None 的情况)
-    def is_enabled(check_func_name: str) -> bool:
-        if config is None:
-            return True
-        check_func = getattr(config, check_func_name, None)
-        if check_func:
-            return check_func()
-        return True
-
-    # 2. 止盈规则
-    
-    # 硬性阶梯止盈: 随持仓时间降低预期
-    if is_enabled('is_exit_hard_tp_enabled'):
-        tp_threshold = 0.50
-        duration_desc = "4个月内"
+    # 4. 强制止损/时间风控 (Hard Stop)
+    # 当期权合约距离到期日仅剩 6 个月 (约 180 天) 时，无论盈亏状态如何，必须强制平仓
+    if dte <= 180:
+        alerts.append({
+            "rule_name": "Time Stop (180 DTE)",
+            "message": f"⛔ [强制平仓] 距离到期日仅剩 {dte} 天 (<=180天)，触发时间风控",
+            "severity": "CRITICAL",
+            "trigger_condition": f"DTE {dte} <= 180",
+            "alert_type": "OPTION_TIME",
+            "dte": dte,
+            "expiration_date": expiration_date.strftime("%Y-%m-%d")
+        })
+    else:
+        # 3. 出场逻辑 (Exit/Profit Taking) - 阶梯止盈
+        tp_threshold = None
+        duration_desc = ""
         
-        if held_days > 180:
-            tp_threshold = 0.10
-            duration_desc = "7个月以上"
-        elif held_days > 120:
-            tp_threshold = 0.30
-            duration_desc = "5-6个月"
+        if held_days < 365:
+            tp_threshold = 1.00  # 100%
+            duration_desc = "< 12 个月"
+        elif 365 <= held_days <= 456:
+            tp_threshold = 0.50  # 50%
+            duration_desc = "12-15 个月"
+        elif 456 < held_days <= 547:
+            tp_threshold = 0.30  # 30%
+            duration_desc = "16-18 个月"
+        else:
+            tp_threshold = 0.30  # 默认兜底
+            duration_desc = "> 18 个月"
             
-        if pnl_pct >= tp_threshold:
+        if tp_threshold is not None and pnl_pct >= tp_threshold:
             alerts.append({
                 "rule_name": "Tiered Take Profit",
-                "message": f"🎯 [目标达成] {duration_desc}收益达标 ({tp_threshold*100:.0f}%)",
+                "message": f"🎯 [阶梯止盈] 持仓 {duration_desc}，收益达标 ({tp_threshold*100:.0f}%)",
                 "severity": "HIGH",
-                "trigger_condition": f"持仓{held_days}天({duration_desc}) AND 盈利 {pnl_pct*100:.1f}% >= {tp_threshold*100:.0f}%"
-            })
-        
-    # 极速止盈: 持仓 <= 7天 AND 收益 >= 15%
-    if is_enabled('is_exit_fast_tp_enabled') and held_days <= 7 and pnl_pct >= 0.15:
-        alerts.append({
-            "rule_name": "Fast Take Profit",
-            "message": "🚀 [极速爆发] 短期爆发 (持仓<=7天, 收益>=15%)",
-            "severity": "MEDIUM",
-            "trigger_condition": f"持仓 {held_days}天 <= 7 AND 盈利 {pnl_pct*100:.1f}% >= 15%"
-        })
-        
-    # 移动止盈: 最高 >= 30% AND 回撤 > 10%
-    if is_enabled('is_exit_trailing_tp_enabled') and new_max_profit >= 0.30:
-        drawdown = new_max_profit - pnl_pct
-        if drawdown >= 0.10:
-            alerts.append({
-                "rule_name": "Trailing Stop",
-                "message": f"📉 [利润回撤] 最高收益 {new_max_profit*100:.1f}%, 当前 {pnl_pct*100:.1f}%",
-                "severity": "HIGH",
-                "trigger_condition": f"回撤 {drawdown*100:.1f}% >= 10%"
-            })
-
-    # 技术止盈: QQQ RSI > 75 OR 突破布林上轨
-    if is_enabled('is_exit_tech_tp_enabled'):
-        rsi = qqq_indicators.get("rsi")
-        bb_upper = qqq_indicators.get("bb_upper")
-        last_price = qqq_indicators.get("last_price")
-        
-        technical_exit = False
-        tech_msg = ""
-        
-        if rsi and rsi > 75:
-            technical_exit = True
-            tech_msg = f"RSI过热 ({rsi:.1f})"
-        elif bb_upper and last_price and last_price > bb_upper:
-            technical_exit = True
-            tech_msg = "突破布林上轨"
-            
-        if technical_exit:
-            alerts.append({
-                "rule_name": "Technical Exit",
-                "message": f"⚠️ [大盘过热] {tech_msg}",
-                "severity": "MEDIUM",
-                "trigger_condition": tech_msg
-            })
-
-    # 3. 风控规则
-    
-    # DTE 强制清仓
-    if is_enabled('is_exit_dte_force_enabled') and dte < 90:
-        alerts.append({
-            "rule_name": "Force Exit (Time)",
-            "message": "⛔ [强制清仓] (DTE < 90)",
-            "severity": "CRITICAL",
-            "trigger_condition": f"DTE {dte} < 90"
-        })
-    # DTE 移仓窗口
-    elif is_enabled('is_exit_dte_warning_enabled') and dte < 120:
-        alerts.append({
-            "rule_name": "Rollover Window",
-            "message": "⏳ [移仓窗口] (DTE < 120)",
-            "severity": "MEDIUM",
-            "trigger_condition": f"DTE {dte} < 120"
-        })
-        
-    # 技术止损: QQQ 有效跌破 MA200 (< 99% of MA200)
-    if is_enabled('is_exit_trend_stop_enabled'):
-        ma200 = qqq_indicators.get("ma200")
-        last_price = qqq_indicators.get("last_price")
-        if ma200 and last_price and last_price < (ma200 * 0.99):
-            alerts.append({
-                "rule_name": "Trend Breakdown",
-                "message": "🛑 [趋势崩坏] 有效跌破年线",
-                "severity": "CRITICAL",
-                "trigger_condition": f"价格 {last_price:.2f} < 0.99 * MA200 {ma200:.2f}"
+                "trigger_condition": f"持仓 {held_days}天 ({duration_desc}) AND 盈利 {pnl_pct*100:.1f}% >= {tp_threshold*100:.0f}%",
+                "alert_type": "OPTION_TAKE_PROFIT",
+                "profit_pct": pnl_pct * 100,
+                "days_held": held_days
             })
 
     # Formatting alerts
     for alert in alerts:
-        alert["alert_type"] = "OPTION_SIGNAL"
         alert["position_id"] = position.id
+        alert["entry_price"] = entry_price
         alert["current_price"] = current_opt_price
         alert["pnl_pct"] = pnl_pct * 100
         alert["timestamp"] = datetime.now(et_tz)
