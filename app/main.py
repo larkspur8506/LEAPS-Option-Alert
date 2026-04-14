@@ -70,7 +70,6 @@ async def startup_event():
             "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
         }
 
-
         config = get_config(config_dict)
 
         polygon_client = CachedPolygonClient(config.get_polygon_api_key())
@@ -149,7 +148,7 @@ async def setup_page(request: Request, db: Session = Depends(get_db)):
     if not is_first_time_setup(db):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    return templates.TemplateResponse("setup.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="setup.html", context={"request": request})
 
 
 @app.post("/setup")
@@ -159,7 +158,7 @@ async def setup(request: Request, password: str = Form(...), db: Session = Depen
             return RedirectResponse(url="/admin/login", status_code=302)
 
         if len(password) < 6:
-            return templates.TemplateResponse("setup.html", {
+            return templates.TemplateResponse(request=request, name="setup.html", context={
                 "request": request,
                 "error": "密码长度至少为 6 位"
             })
@@ -172,7 +171,7 @@ async def setup(request: Request, password: str = Form(...), db: Session = Depen
         return RedirectResponse(url="/admin/login", status_code=302)
     except Exception as e:
         print(f"Setup error: {e}")
-        return templates.TemplateResponse("setup.html", {
+        return templates.TemplateResponse(request=request, name="setup.html", context={
             "request": request,
             "error": f"设置失败: {str(e)}"
         })
@@ -183,7 +182,7 @@ async def login_page(request: Request, db: Session = Depends(get_db)):
     if is_first_time_setup(db):
         return RedirectResponse(url="/setup", status_code=302)
 
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="login.html", context={"request": request})
 
 
 @app.post("/admin/login")
@@ -197,7 +196,7 @@ async def login(
         response.set_cookie(key="admin_logged_in", value="true")
         return response
 
-    return templates.TemplateResponse("login.html", {
+    return templates.TemplateResponse(request=request, name="login.html", context={
         "request": request,
         "error": "密码错误"
     })
@@ -226,13 +225,11 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
 
     market_open = is_market_open_now()
     
-    # Fetch real-time market data for market awareness widget
     qqq_price = None
     rsi = None
     
     if data_fetcher:
         try:
-            # Get QQQ current price and RSI
             qqq_data = data_fetcher.get_qqq_data()
             if qqq_data:
                 qqq_price = qqq_data.get("last_price")
@@ -241,7 +238,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         except Exception as e:
             print(f"Market data fetch error: {e}")
 
-    return templates.TemplateResponse("dashboard.html", {
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={
         "request": request,
         "positions_count": positions_count,
         "today_logs": today_logs,
@@ -249,7 +246,6 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         "qqq_price": qqq_price,
         "rsi": rsi
     })
-
 
 
 @app.get("/admin/positions", response_class=HTMLResponse)
@@ -260,7 +256,7 @@ async def positions(request: Request, db: Session = Depends(get_db)):
     positions = db.query(OptionPosition).order_by(OptionPosition.created_at.desc()).all()
     today = get_current_time_et().date()
 
-    return templates.TemplateResponse("positions.html", {
+    return templates.TemplateResponse(request=request, name="positions.html", context={
         "request": request,
         "positions": positions,
         "today": today
@@ -283,13 +279,9 @@ async def add_position(
         return RedirectResponse(url="/admin/login", status_code=302)
 
     try:
-        # 验证并格式化到期日
         exp_date_obj = date.fromisoformat(expiration_date)
-        # 转换为 Yahoo Finance 格式 (YYMMDD)
         yahoo_exp_date = exp_date_obj.strftime("%y%m%d")
         
-        # 验证期权代码格式
-        # Yahoo Finance 标准格式: {Underlying}{YYMMDD}{C/P}{Strike * 1000 (8位)}
         strike_str = f"{int(strike_price * 1000):08d}"
         yahoo_ticker = f"{underlying}{yahoo_exp_date}{option_type[0].upper()}{strike_str}"
         
@@ -360,9 +352,6 @@ async def refresh_position_price(
             pnl_amount = (current_price - position.entry_price) * (position.quantity or 1) * 100
             pnl_pct = ((current_price - position.entry_price) / position.entry_price * 100) if position.entry_price > 0 else 0
 
-            # Update max_profit if current PnL is higher
-            # Note: We store max_profit as a decimal (e.g. 0.50 for 50%), but pnl_pct here is for UI (e.g. 50.0)
-            # Database stores decimal format for calculation rules
             current_pnl_decimal = pnl_pct / 100.0
             if current_pnl_decimal > (position.max_profit or 0.0):
                 position.max_profit = current_pnl_decimal
@@ -388,7 +377,7 @@ async def rules(request: Request, db: Session = Depends(get_db)):
 
     config_db = db.query(Configuration).first()
 
-    return templates.TemplateResponse("rules.html", {
+    return templates.TemplateResponse(request=request, name="rules.html", context={
         "request": request,
         "config": config_db
     })
@@ -416,12 +405,10 @@ async def update_rules(
 
     config_db = db.query(Configuration).first()
 
-    # New entry rules
     config_db.entry_level1_enabled = entry_level1_enabled
     config_db.entry_level2_enabled = entry_level2_enabled
     config_db.entry_level3_enabled = entry_level3_enabled
     
-    # New exit rules
     config_db.exit_hard_tp_enabled = exit_hard_tp_enabled
     config_db.exit_fast_tp_enabled = exit_fast_tp_enabled
     config_db.exit_trailing_tp_enabled = exit_trailing_tp_enabled
@@ -430,11 +417,9 @@ async def update_rules(
     config_db.exit_dte_force_enabled = exit_dte_force_enabled
     config_db.exit_trend_stop_enabled = exit_trend_stop_enabled
 
-
     db.commit()
 
     return RedirectResponse(url="/admin/rules", status_code=303)
-
 
 
 @app.get("/admin/logs", response_class=HTMLResponse)
@@ -444,7 +429,7 @@ async def logs(request: Request, db: Session = Depends(get_db)):
 
     logs = db.query(AlertLog).order_by(AlertLog.triggered_at.desc()).limit(100).all()
 
-    return templates.TemplateResponse("logs.html", {
+    return templates.TemplateResponse(request=request, name="logs.html", context={
         "request": request,
         "logs": logs
     })
