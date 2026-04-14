@@ -44,7 +44,7 @@
                             %H:%M:%S') }}</td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">
                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
-                                {% if log.alert_type == 'QQQ_DROP' %}bg-blue-100 text-blue-800
+                                {% if 'ENTRY' in log.alert_type %}bg-blue-100 text-blue-800
                                 {% elif 'OPTION_TAKE_PROFIT' in log.alert_type %}bg-green-100 text-green-800
                                 {% elif 'OPTION_STOP_LOSS' in log.alert_type %}bg-red-100 text-red-800
                                 {% else %}bg-yellow-100 text-yellow-800{% endif %}">
@@ -89,7 +89,7 @@
                 </svg>
             </button>
         </div>
-        <div id="detailsContent" class="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
+        <div id="detailsContent" class="p-6 overflow-y-auto max-h-[calc(90vh-80px)] space-y-4">
             <!-- Content will be dynamically inserted -->
         </div>
     </div>
@@ -100,11 +100,11 @@
         {% for log in logs %}
     {
         time: "{{ log.triggered_at.strftime('%Y-%m-%d %H:%M:%S') }}",
-            type: "{{ log.alert_type }}",
-                rule: "{{ log.rule_name }}",
-                    message: { { log.message | tojson | safe } },
-        success: { { 'true' if log.sent_successfully else 'false' } }
-    } {% if not loop.last %}, {% endif %}
+        type: "{{ log.alert_type }}",
+        rule: "{{ log.rule_name }}",
+        message: {{ log.message | tojson | safe }},
+        success: {{ 'true' if log.sent_successfully else 'false' }}
+    }{% if not loop.last %},{% endif %}
     {% endfor %}
     ];
 
@@ -117,18 +117,15 @@
         try {
             let data;
             if (typeof message === 'string') {
-                // Try JSON format first
                 try {
                     data = JSON.parse(message);
                 } catch (jsonErr) {
-                    // If JSON fails, try Python dict repr format (single quotes)
-                    // Replace single quotes with double quotes for property names and string values
                     let fixed = message
-                        .replace(/'/g, '"')  // Replace all single quotes with double quotes
+                        .replace(/'/g, '"')
                         .replace(/\bTrue\b/g, 'true')
                         .replace(/\bFalse\b/g, 'false')
                         .replace(/\bNone\b/g, 'null')
-                        .replace(/datetime\.datetime\([^)]+\)/g, '""');  // Remove datetime objects
+                        .replace(/datetime\.datetime\([^)]+\)/g, '""');
                     data = JSON.parse(fixed);
                 }
             } else {
@@ -140,16 +137,15 @@
                 return formatEntrySignal(data);
             } else if (data.alert_type && (data.alert_type.includes('TAKE_PROFIT') || data.alert_type.includes('STOP_LOSS'))) {
                 return formatExitSignal(data);
-            } else if (data.alert_type && data.alert_type.includes('DTE')) {
+            } else if (data.alert_type && data.alert_type.includes('TIME') || data.alert_type.includes('DTE')) {
                 return formatDTESignal(data);
             } else {
                 return formatGenericSignal(data);
             }
         } catch (e) {
-            // If not JSON, display as plain text
             return `
                 <div class="bg-white border border-gray-200 rounded-lg p-4">
-                    <h4 class="font-semibold text-gray-700 mb-2">消息内容</h4>
+                    <h4 class="font-semibold text-gray-700 mb-2">原始数据</h4>
                     <pre class="text-sm text-gray-600 whitespace-pre-wrap font-mono bg-gray-50 p-3 rounded">${message}</pre>
                 </div>
             `;
@@ -159,79 +155,81 @@
     // Format entry signals (QQQ_ENTRY)
     function formatEntrySignal(data) {
         const price = data.current_price ? `$${parseFloat(data.current_price).toFixed(2)}` : 'N/A';
-        const drop = data.drop_percent ? `${parseFloat(data.drop_percent).toFixed(2)}%` : 'N/A';
-        const vix = data.vix_index ? parseFloat(data.vix_index).toFixed(2) : 'N/A';
+        const deltaRec = data.delta_recommendation || {};
+
+        let deltaHtml = '';
+        if (deltaRec.available) {
+            deltaHtml = `
+            <div class="col-span-1 sm:col-span-2 bg-blue-50 border border-blue-100 rounded-lg p-4 mt-2">
+                <h4 class="font-semibold text-blue-800 mb-2 flex items-center gap-2">
+                    <span>📋</span>期权建仓指引
+                </h4>
+                <div class="text-sm text-blue-900 space-y-1">
+                    <p><strong>到期日要求：</strong>${deltaRec.expiration || 'N/A'}</p>
+                    <p><strong>Delta 要求：</strong><span class="font-mono font-bold">${deltaRec.delta_recommend || 'N/A'}</span></p>
+                    <p class="mt-2 pt-2 border-t border-blue-200 text-xs text-blue-700">${deltaRec.explanation || ''}</p>
+                </div>
+            </div>`;
+        }
 
         return `
-            <div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border-l-4 border-blue-500">
-                <h4 class="font-semibold text-blue-800 mb-3 flex items-center gap-2">
-                    <span class="text-xl">📈</span> 入场信号详情
-                </h4>
+            <div class="bg-white rounded-lg p-0">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                    <div class="bg-white rounded p-3 shadow-sm">
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
                         <span class="text-gray-500 block text-xs mb-1">规则名称</span>
                         <span class="font-medium text-gray-800">${data.rule_name || 'N/A'}</span>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">信号类型</span>
-                        <span class="font-medium text-blue-600">${data.message || 'N/A'}</span>
-                    </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">当前价格</span>
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
+                        <span class="text-gray-500 block text-xs mb-1">当前大盘价格</span>
                         <span class="font-bold text-lg text-gray-900">${price}</span>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">跌幅</span>
-                        <span class="font-bold text-lg ${parseFloat(data.drop_percent) < 0 ? 'text-red-600' : 'text-green-600'}">${drop}</span>
+                    <div class="col-span-1 sm:col-span-2 bg-red-50 border border-red-100 rounded p-3">
+                        <span class="text-red-500 block text-xs mb-1">信号触发详情</span>
+                        <span class="font-medium text-red-700">${data.message || 'N/A'}</span>
+                        <p class="text-xs text-red-600 mt-1">条件: ${data.trigger_condition || 'N/A'}</p>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">VIX 指数</span>
-                        <span class="font-medium text-gray-800">${vix}</span>
-                    </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">VIX 状态</span>
-                        <span class="font-medium ${data.vix_status && data.vix_status.includes('安全') ? 'text-green-600' : 'text-yellow-600'}">${data.vix_status || 'N/A'}</span>
-                    </div>
-                    <div class="col-span-1 sm:col-span-2 bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">触发条件</span>
-                        <span class="font-medium text-gray-800">${data.trigger_condition || 'N/A'}</span>
-                    </div>
+                    ${deltaHtml}
                 </div>
             </div>
         `;
     }
 
-    // Format exit signals (TAKE_PROFIT, STOP_LOSS)
+    // Format exit signals (TAKE_PROFIT)
     function formatExitSignal(data) {
-        const price = data.current_price ? `$${parseFloat(data.current_price).toFixed(2)}` : 'N/A';
-        const profit = data.profit_percent ? `${parseFloat(data.profit_percent).toFixed(2)}%` : 'N/A';
+        const currentPrice = data.current_price ? `$${parseFloat(data.current_price).toFixed(2)}` : 'N/A';
+        const entryPrice = data.entry_price ? `$${parseFloat(data.entry_price).toFixed(2)}` : 'N/A';
+        const profit = data.profit_pct !== undefined ? `${parseFloat(data.profit_pct).toFixed(2)}%` : (data.pnl_pct !== undefined ? `${parseFloat(data.pnl_pct).toFixed(2)}%` : 'N/A');
+        const daysHeld = data.days_held !== undefined ? data.days_held : 'N/A';
         const isProfit = data.alert_type && data.alert_type.includes('TAKE_PROFIT');
 
         return `
-            <div class="bg-gradient-to-r ${isProfit ? 'from-green-50 to-emerald-50' : 'from-red-50 to-orange-50'} rounded-lg p-4 border-l-4 ${isProfit ? 'border-green-500' : 'border-red-500'}">
-                <h4 class="font-semibold ${isProfit ? 'text-green-800' : 'text-red-800'} mb-3 flex items-center gap-2">
-                    <span class="text-xl">${isProfit ? '💰' : '🛑'}</span> ${isProfit ? '止盈信号' : '止损信号'}详情
-                </h4>
+            <div class="bg-white rounded-lg p-0">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                    <div class="bg-white rounded p-3 shadow-sm">
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
                         <span class="text-gray-500 block text-xs mb-1">规则名称</span>
                         <span class="font-medium text-gray-800">${data.rule_name || 'N/A'}</span>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">盈亏状态</span>
-                        <span class="font-bold ${isProfit ? 'text-green-600' : 'text-red-600'}">${profit}</span>
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
+                        <span class="text-gray-500 block text-xs mb-1">持仓天数</span>
+                        <span class="font-medium text-gray-800">${daysHeld} 天</span>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
+                        <span class="text-gray-500 block text-xs mb-1">入场价格</span>
+                        <span class="font-medium text-gray-700">${entryPrice}</span>
+                    </div>
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
                         <span class="text-gray-500 block text-xs mb-1">当前价格</span>
-                        <span class="font-bold text-lg text-gray-900">${price}</span>
+                        <span class="font-bold text-gray-900">${currentPrice}</span>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">持仓标的</span>
-                        <span class="font-medium text-gray-800">${data.position_symbol || 'N/A'}</span>
-                    </div>
-                    <div class="col-span-1 sm:col-span-2 bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">触发条件</span>
-                        <span class="font-medium text-gray-800">${data.trigger_condition || 'N/A'}</span>
+                    <div class="col-span-1 sm:col-span-2 ${isProfit ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'} border rounded p-3 flex justify-between items-center">
+                        <div>
+                            <span class="${isProfit ? 'text-green-600' : 'text-red-600'} block text-xs mb-1">当前盈亏比例</span>
+                            <span class="font-bold text-xl ${isProfit ? 'text-green-700' : 'text-red-700'}">${profit}</span>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-gray-500 text-xs mb-1 block">触发说明</span>
+                            <span class="font-medium text-gray-700 text-sm">${data.message || 'N/A'}</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -240,29 +238,26 @@
 
     // Format DTE expiration warnings
     function formatDTESignal(data) {
-        const days = data.days_to_expiration || 'N/A';
+        const days = data.dte !== undefined ? data.dte : 'N/A';
+        const expDate = data.expiration_date || 'N/A';
 
         return `
-            <div class="bg-gradient-to-r from-yellow-50 to-amber-50 rounded-lg p-4 border-l-4 border-yellow-500">
-                <h4 class="font-semibold text-yellow-800 mb-3 flex items-center gap-2">
-                    <span class="text-xl">⏰</span> 期权到期提醒
-                </h4>
+            <div class="bg-white rounded-lg p-0">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">持仓标的</span>
-                        <span class="font-medium text-gray-800">${data.position_symbol || 'N/A'}</span>
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
+                        <span class="text-gray-500 block text-xs mb-1">规则名称</span>
+                        <span class="font-medium text-gray-800">${data.rule_name || 'N/A'}</span>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">剩余天数</span>
-                        <span class="font-bold text-lg ${days < 30 ? 'text-red-600' : days < 90 ? 'text-yellow-600' : 'text-green-600'}">${days} 天</span>
+                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
+                        <span class="text-gray-500 block text-xs mb-1">期权到期日</span>
+                        <span class="font-medium text-gray-800">${expDate}</span>
                     </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">到期日</span>
-                        <span class="font-medium text-gray-800">${data.expiration_date || 'N/A'}</span>
-                    </div>
-                    <div class="bg-white rounded p-3 shadow-sm">
-                        <span class="text-gray-500 block text-xs mb-1">当前价格</span>
-                        <span class="font-medium text-gray-800">${data.current_price ? '$' + parseFloat(data.current_price).toFixed(2) : 'N/A'}</span>
+                    <div class="col-span-1 sm:col-span-2 bg-yellow-50 border border-yellow-200 rounded p-4 flex items-center gap-4">
+                        <div class="text-4xl">⚠️</div>
+                        <div>
+                            <span class="text-yellow-800 block font-bold text-lg mb-1">剩余到期天数: ${days} 天</span>
+                            <span class="font-medium text-yellow-700 text-sm">${data.message || '触发时间风控'}</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -271,146 +266,50 @@
 
     // Format generic signals
     function formatGenericSignal(data) {
-        const entries = Object.entries(data).map(([key, value]) => {
-            let displayValue = value;
-            // Format numbers
-            if (typeof value === 'number') {
-                displayValue = value.toFixed(2);
-            } else if (typeof value === 'boolean') {
-                displayValue = value ? '✓ 是' : '✗ 否';
-            } else if (value === null || value === undefined) {
+        const entries = Object.keys(data).filter(k => typeof data[k] !== 'object' || data[k] === null).map(key => {
+            let displayValue = data[key];
+            if (typeof displayValue === 'number') {
+                displayValue = displayValue.toFixed(2);
+            } else if (typeof displayValue === 'boolean') {
+                displayValue = displayValue ? '✓ 是' : '✗ 否';
+            } else if (displayValue === null || displayValue === undefined) {
                 displayValue = 'N/A';
             }
-
-            // Translate common keys
-            const keyLabels = {
-                'rule_name': '规则名称',
-                'message': '消息内容',
-                'alert_type': '提醒类型',
-                'current_price': '当前价格',
-                'drop_percent': '跌幅',
-                'vix_index': 'VIX指数',
-                'vix_status': 'VIX状态',
-                'trigger_condition': '触发条件',
-                'severity': '严重程度',
-                'timestamp': '时间戳',
-                'position_symbol': '持仓标的',
-                'profit_percent': '盈亏比例',
-                'days_to_expiration': '剩余天数',
-                'expiration_date': '到期日'
-            };
-
-            const label = keyLabels[key] || key;
-
             return `
-                <div class="bg-white rounded p-3 shadow-sm">
-                    <span class="text-gray-500 block text-xs mb-1">${label}</span>
-                    <span class="font-medium text-gray-800">${displayValue}</span>
+                <div class="bg-gray-50 border border-gray-100 rounded p-2">
+                    <span class="text-gray-500 block text-xs mb-1">${key}</span>
+                    <span class="font-medium text-gray-800 break-all text-xs">${displayValue}</span>
                 </div>
             `;
         }).join('');
 
         return `
-            <div class="bg-gray-50 rounded-lg p-4 border-l-4 border-gray-400">
-                <h4 class="font-semibold text-gray-700 mb-3">详细信息</h4>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                    ${entries}
-                </div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                ${entries}
             </div>
         `;
     }
 
     function showDetails(index) {
         let log = logsData[index];
-        if (!log.message) log.message = ""; // Handle null/undefined message for old logs
+        if (!log.message) log.message = "";
 
         const modal = document.getElementById('detailsModal');
         const content = document.getElementById('detailsContent');
 
         let html = `
-            <div class="space-y-4">
-                <div class="bg-gray-50 rounded-lg p-4">
-                    <h4 class="font-semibold text-gray-700 mb-2">基本信息</h4>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                        <div><span class="text-gray-500">时间：</span><span class="font-medium">${log.time}</span></div>
-                        <div><span class="text-gray-500">类型：</span><span class="font-medium">${log.type}</span></div>
-                        <div class="col-span-1 sm:col-span-2"><span class="text-gray-500">规则：</span><span class="font-medium">${log.rule}</span></div>
-                    </div>
+            <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 shadow-inner mb-4">
+                <h4 class="font-semibold text-gray-700 mb-3 border-b pb-2">基础记录信息</h4>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-y-3 gap-x-6 text-sm">
+                    <div><span class="text-gray-500 inline-block w-16">时间:</span><span class="font-medium text-gray-800">${log.time}</span></div>
+                    <div><span class="text-gray-500 inline-block w-16">类型:</span><span class="font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded">${log.type}</span></div>
+                    <div class="col-span-1 sm:col-span-2"><span class="text-gray-500 inline-block w-16">推送状态:</span><span class="font-medium ${log.success ? 'text-green-600' : 'text-red-600'}">${log.success ? '✓ 成功发送至企业微信' : '✗ 推送失败'}</span></div>
                 </div>
+            </div>
         `;
 
-        // Parse message to extract panic and delta info
-        let panicInfo = null;
-        let deltaInfo = null;
-
-        // Try to extract panic acceleration from message
-        if (log.message.includes('恐慌加速度') || log.message.includes('🧨')) {
-            const panicMatch = log.message.match(/满足\s*(\d+)\/3\s*条件[：:]\s*([^\\n]+)/);
-            if (panicMatch) {
-                panicInfo = {
-                    count: panicMatch[1],
-                    conditions: panicMatch[2]
-                };
-            }
-        }
-
-        // Try to extract Delta recommendation
-        if (log.message.includes('Delta 推荐') || log.message.includes('VIX:')) {
-            const vixMatch = log.message.match(/VIX:\s*([\d.]+)\s*\(MA20=([\d.]+),\s*比值=([\d.]+)\)/);
-            const deltaMatch = log.message.match(/Delta 推荐:\s*([^\n]+)/);
-            const zoneMatch = log.message.match(/→\s*([^\\n]*(?:安全区|警告区|危险区)[^\\n]*)/);
-
-            if (vixMatch || deltaMatch) {
-                deltaInfo = {
-                    vix: vixMatch ? vixMatch[1] : 'N/A',
-                    ma20: vixMatch ? vixMatch[2] : 'N/A',
-                    ratio: vixMatch ? vixMatch[3] : 'N/A',
-                    delta: deltaMatch ? deltaMatch[1] : 'N/A',
-                    zone: zoneMatch ? zoneMatch[1] : ''
-                };
-            }
-        }
-
-        // Display panic acceleration info
-        if (panicInfo) {
-            html += `
-                <div class="bg-red-50 border-l-4 border-red-400 rounded-lg p-4">
-                    <h4 class="font-semibold text-red-800 mb-2 flex items-center gap-2">
-                        <span>🧨</span>恐慌加速度检测
-                    </h4>
-                    <div class="text-sm text-red-700">
-                        <p><strong>满足条件：</strong>${panicInfo.count}/3</p>
-                        <p class="mt-1">${panicInfo.conditions}</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        // Display Delta recommendation info
-        if (deltaInfo) {
-            let zoneColor = 'green';
-            if (deltaInfo.zone.includes('警告区')) zoneColor = 'yellow';
-            if (deltaInfo.zone.includes('危险区')) zoneColor = 'red';
-
-            html += `
-                <div class="bg-${zoneColor}-50 border-l-4 border-${zoneColor}-400 rounded-lg p-4">
-                    <h4 class="font-semibold text-${zoneColor}-800 mb-2 flex items-center gap-2">
-                        <span>📊</span>Delta 推荐
-                    </h4>
-                    <div class="text-sm text-${zoneColor}-700 space-y-1">
-                        <p><strong>VIX 当前：</strong>${deltaInfo.vix}</p>
-                        <p><strong>VIX MA20：</strong>${deltaInfo.ma20}</p>
-                        <p><strong>比值：</strong>${deltaInfo.ratio}</p>
-                        <p><strong>推荐 Delta：</strong><span class="font-mono font-bold">${deltaInfo.delta}</span></p>
-                        ${deltaInfo.zone ? `<p class="mt-2 pt-2 border-t border-${zoneColor}-200"><strong>区域：</strong>${deltaInfo.zone}</p>` : ''}
-                    </div>
-                </div>
-            `;
-        }
-
-        // Parse and display structured message
+        html += `<h4 class="font-semibold text-gray-700 mb-3">系统日志体</h4>`;
         html += parseStructuredMessage(log.message);
-        html += `</div>`;
 
         content.innerHTML = html;
         modal.classList.remove('hidden');
