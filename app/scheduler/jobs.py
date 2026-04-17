@@ -42,8 +42,8 @@ def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
         qqq_alerts = qqq_rules.check_all_qqq_rules(qqq_data, config)
 
         for alert in qqq_alerts:
-            # 使用 rule_name 进行每周去重 (每周最多一次买入指令)
-            if dedup.should_alert_weekly(alert["rule_name"]):
+            # 使用 rule_name 进行每日去重 (每天最多一次买入指令)
+            if dedup.should_alert(alert["rule_name"]):
                 success = notifier.send_qqq_alert(alert)
                 _log_alert(db, alert, success)
 
@@ -153,6 +153,50 @@ def _log_alert(db, alert: dict, success: bool):
     db.commit()
 
 
+def send_daily_report_job(data_fetcher: DataFetcher, db, config):
+    logger.info("Generating daily report...")
+    if not is_trading_time():
+        # Optional: could check if market was open today, but this runs at 16:15 so it's fine.
+        pass
+
+    qqq_data = data_fetcher.get_qqq_data()
+    if not qqq_data.get("last_price"):
+        return
+
+    from app.database.models import OptionPosition
+    positions_count = db.query(OptionPosition).count()
+
+    # Determine unmet conditions
+    unmet = []
+    if qqq_data.get("rsi", 100) >= 35:
+        unmet.append(f"RSI({qqq_data.get('rsi',0):.1f}) >= 35")
+    if not qqq_data.get("is_above_sma200_3d"):
+        unmet.append("未连续3天站上SMA200")
+    if qqq_data.get("last_price", 0) <= qqq_data.get("price_1y_ago", 0):
+        unmet.append("当前价低于1年前")
+        
+    entry_met = len(unmet) == 0
+
+    report_data = {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "qqq_price": qqq_data.get("last_price"),
+        "sma200": qqq_data.get("ma200"),
+        "consecutive_days": qqq_data.get("consec_above") if qqq_data.get("last_price") > qqq_data.get("ma200") else qqq_data.get("consec_below"),
+        "price_1y": qqq_data.get("price_1y_ago"),
+        "rsi": qqq_data.get("rsi"),
+        "entry_met": entry_met,
+        "unmet_conditions": "，".join(unmet),
+        "current_positions": positions_count,
+        "max_positions": 5, # default
+        "stop_warning": qqq_data.get("is_below_sma200_3d", False)
+    }
+
+    notifier = get_wechat_notifier(config.get_wechat_webhook_url())
+    # bypass dedup or use a special dedup key
+    if dedup.should_alert("DAILY_REPORT"):
+        notifier.send_daily_report(report_data)
+
+
 def start_scheduler(data_fetcher: DataFetcher, db, config):
     scheduler.add_job(
         check_qqq_and_options,
@@ -161,6 +205,19 @@ def start_scheduler(data_fetcher: DataFetcher, db, config):
         args=[data_fetcher, db, config],
         id="check_qqq_and_options",
         name="Check QQQ and Options",
+        replace_existing=True
+    )
+
+    scheduler.add_job(
+        send_daily_report_job,
+        "cron",
+        hour=16,
+        minute=30,
+        day_of_week='mon-fri',
+        timezone="America/New_York",
+        args=[data_fetcher, db, config],
+        id="send_daily_report",
+        name="Send Daily Report",
         replace_existing=True
     )
 

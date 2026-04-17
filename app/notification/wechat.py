@@ -16,6 +16,51 @@ class WeChatNotifier:
         message = self._format_option_alert(alert, position_ticker)
         return self._send_message(message)
 
+    def send_daily_report(self, report_data: Dict) -> bool:
+        message = self._format_daily_report(report_data)
+        return self._send_message(message)
+
+    def _format_daily_report(self, data: Dict) -> str:
+        date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        qqq_price = data.get("qqq_price", 0.0)
+        sma200 = data.get("sma200", 0.0)
+        above_below = "之上" if qqq_price > sma200 else "之下"
+        consec_days = data.get("consecutive_days", 0)
+        
+        price_1y = data.get("price_1y", 0.0)
+        pct_change = ((qqq_price - price_1y) / price_1y * 100) if price_1y > 0 else 0.0
+        pct_sign = "+" if pct_change >= 0 else ""
+        
+        rsi = data.get("rsi", 0.0)
+        
+        entry_met = data.get("entry_met", False)
+        entry_status = "满足" if entry_met else "不满足"
+        unmet_cond = data.get("unmet_conditions", "")
+        unmet_str = f"（未满足条件：{unmet_cond}）" if not entry_met and unmet_cond else ""
+        
+        current_pos = data.get("current_positions", 0)
+        max_pos = data.get("max_positions", "N")
+        
+        stop_warn = data.get("stop_warning", False)
+        stop_status = "警告" if stop_warn else "正常"
+        stop_extra = f"（均线跌破第{consec_days}日）" if stop_warn else ""
+
+        return f"""📅 日期：{date_str}
+
+💹 QQQ收盘价：${qqq_price:.2f}
+
+📊 SMA200：${sma200:.2f}（当前价格在均线{above_below}，连续{consec_days}日）
+
+📈 一年前收盘价：${price_1y:.2f}（当前较一年前 {pct_sign}{pct_change:.1f}%）
+
+📉 RSI(14)：{rsi:.1f}
+
+🎯 入场信号：{entry_status}{unmet_str}
+
+📋 当前持仓：{current_pos}张（上限{max_pos}张）
+
+⚠️ 止损状态：{stop_status}{stop_extra}"""
+
     def _format_qqq_alert(self, alert: Dict) -> str:
         timestamp = alert.get("timestamp", datetime.now())
         time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S") if isinstance(timestamp, datetime) else str(timestamp)

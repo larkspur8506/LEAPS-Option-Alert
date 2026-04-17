@@ -234,6 +234,30 @@ class DataFetcher:
                     daily_changes.append(change_pct)
             # daily_changes: [今天跌幅, 昨天跌幅, 前天跌幅]
 
+            # 新增: 连续几天均线判断
+            is_above_sma200_3d = False
+            is_below_sma200_3d = False
+            consec_above = 0
+            consec_below = 0
+            if len(df) > 0:
+                for i in range(1, min(len(df), 200)):
+                    close_p = float(df["Close"].iloc[-i])
+                    ma_p = float(df["ma200"].iloc[-i])
+                    if pd.notna(ma_p):
+                        if close_p > ma_p and consec_below == 0:
+                            consec_above += 1
+                        elif close_p < ma_p and consec_above == 0:
+                            consec_below += 1
+                        else:
+                            break
+            
+            if len(df) >= 3 and pd.notna(df["ma200"].iloc[-3:]).all():
+                is_above_sma200_3d = bool((df["Close"].iloc[-3:] > df["ma200"].iloc[-3:]).all())
+                is_below_sma200_3d = bool((df["Close"].iloc[-3:] < df["ma200"].iloc[-3:]).all())
+
+            # 新增: 1年前（252个交易日）的收盘价
+            price_1y_ago = float(df["Close"].iloc[0]) if len(df) > 0 else None
+
             # 组装结果
             result = {
                 "date": datetime.now(et_tz).date(),
@@ -243,6 +267,11 @@ class DataFetcher:
                 # 指标 (Pandas series 取最后一行可能为 NaN，需处理)
                 "ma20": float(latest["ma20"]) if pd.notna(latest["ma20"]) else None,
                 "ma200": float(latest["ma200"]) if pd.notna(latest["ma200"]) else None,
+                "is_above_sma200_3d": is_above_sma200_3d,
+                "is_below_sma200_3d": is_below_sma200_3d,
+                "consec_above": consec_above,
+                "consec_below": consec_below,
+                "price_1y_ago": price_1y_ago,
                 "rsi": float(latest["rsi"]) if pd.notna(latest["rsi"]) else None,
                 "bb_upper": float(latest["bb_upper"]) if pd.notna(latest["bb_upper"]) else None,
                 "bb_lower": float(latest["bb_lower"]) if pd.notna(latest["bb_lower"]) else None,

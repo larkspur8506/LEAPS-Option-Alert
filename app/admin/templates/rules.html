@@ -34,14 +34,14 @@
                 <div class="p-4 bg-gray-50 rounded-xl border border-gray-100">
                     <h3 class="font-medium text-gray-900 mb-2">1. 技术指标触发</h3>
                     <p class="text-sm text-gray-600">
-                        监控日线级别 <strong>RSI (14)</strong>。当 RSI 跌破 <strong>35</strong> 时，代表市场进入超卖区/恐慌期，系统将触发买入提醒。
+                        监控日线级别 <strong>RSI (14)</strong> 并且判断均线趋势。当 RSI 跌破 <strong>35</strong>，且 <strong>连续 3 天 QQQ 收盘价大于 SMA200</strong>，且 <strong>当前价高于一年前收盘价</strong> 时，系统将触发买入提醒。
                     </p>
                 </div>
                 
                 <div class="p-4 bg-gray-50 rounded-xl border border-gray-100">
                     <h3 class="font-medium text-gray-900 mb-2">2. 执行频率限制 (Frequency Gate)</h3>
                     <p class="text-sm text-gray-600">
-                        为平摊成本，系统自动控制每周最多只允许触发 <strong>一次</strong> 买入指令。
+                        为防止频繁轰炸，系统自动控制每天最多只允许触发 <strong>一次</strong> 买入指令（解除了单周执行限制）。
                     </p>
                 </div>
 
@@ -49,8 +49,8 @@
                     <h3 class="font-medium text-blue-900 mb-2">💡 期权筛选标准</h3>
                     <ul class="text-sm text-blue-800 list-disc list-inside space-y-1">
                         <li><strong>底层资产：</strong> QQQ (Nasdaq 100 ETF)</li>
-                        <li><strong>到期日：</strong> 选择距离现在约 2 年（730天左右）到期的合约</li>
-                        <li><strong>Delta 值：</strong> 选择深度实值，Delta 接近 0.7 的期权</li>
+                        <li><strong>到期日：</strong> 选择距离现在约 12 个月（365天左右）到期的合约</li>
+                        <li><strong>Delta 值：</strong> 选择深度实值，Delta 接近 0.6 的期权</li>
                     </ul>
                 </div>
             </div>
@@ -64,7 +64,7 @@
                 </div>
                 <div>
                     <h2 class="text-lg font-bold text-gray-900">出场逻辑 (Exit / Profit Taking)</h2>
-                    <p class="text-sm text-gray-500">严格执行阶梯止盈</p>
+                    <p class="text-sm text-gray-500">严格执行阶梯止盈（基于精确自然月）</p>
                 </div>
             </div>
 
@@ -73,16 +73,20 @@
                 
                 <div class="grid gap-3">
                     <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                        <span class="text-gray-700 text-sm">持有期 <strong>&lt; 12 个月</strong></span>
+                        <span class="text-gray-700 text-sm">持有期 <strong>不足 4 个月</strong></span>
                         <span class="px-3 py-1 bg-green-100 text-green-700 font-bold rounded text-sm">利润 100% 止盈</span>
                     </div>
                     <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                        <span class="text-gray-700 text-sm">持有期 <strong>12 - 15 个月</strong></span>
+                        <span class="text-gray-700 text-sm">持有期 <strong>5 - 7 个月</strong></span>
                         <span class="px-3 py-1 bg-blue-100 text-blue-700 font-bold rounded text-sm">利润 50% 止盈</span>
                     </div>
                     <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
-                        <span class="text-gray-700 text-sm">持有期 <strong>16 - 18 个月</strong></span>
+                        <span class="text-gray-700 text-sm">持有期 <strong>第 8 个月</strong></span>
                         <span class="px-3 py-1 bg-purple-100 text-purple-700 font-bold rounded text-sm">利润 30% 止盈</span>
+                    </div>
+                    <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
+                        <span class="text-gray-700 text-sm">持有期 <strong>9 个月及以上</strong></span>
+                        <span class="px-3 py-1 bg-gray-200 text-gray-700 font-bold rounded text-sm">利润 10% 止盈</span>
                     </div>
                 </div>
             </div>
@@ -96,15 +100,22 @@
                 </div>
                 <div>
                     <h2 class="text-lg font-bold text-gray-900">强制止损与时间风控 (Hard Stop)</h2>
-                    <p class="text-sm text-gray-500">规避 Theta 加速衰减</p>
+                    <p class="text-sm text-gray-500">规避大盘趋势反转与 Theta 加速衰减</p>
                 </div>
             </div>
 
             <div class="space-y-4 pl-0 sm:pl-14">
-                <div class="p-4 bg-red-50 rounded-xl border border-red-100">
-                    <h3 class="font-medium text-red-900 mb-2">⏳ 时间止损 (Time Stop)</h3>
+                <div class="p-4 bg-red-50 rounded-xl border border-red-100 mb-4">
+                    <h3 class="font-medium text-red-900 mb-2">📉 趋势止损 (Trend Stop)</h3>
                     <p class="text-sm text-red-800">
-                        当期权合约距离到期日仅剩 <strong>6 个月 (约 180 天)</strong> 时，无论当前盈亏状态如何，系统均会触发强制平仓报警，以规避期权末期加速的时间价值衰减（Theta Decay）。
+                        当 QQQ 收盘价 <strong>连续 3 个交易日跌破 SMA200</strong> 均线时，表明长线趋势可能反转，系统将触发强制平仓止损报警。
+                    </p>
+                </div>
+
+                <div class="p-4 bg-orange-50 rounded-xl border border-orange-100">
+                    <h3 class="font-medium text-orange-900 mb-2">⏳ 时间止损 (Time Stop)</h3>
+                    <p class="text-sm text-orange-800">
+                        当期权合约距离到期日仅剩不足 <strong>3 个月 (90 天)</strong> 时，无论当前盈亏状态如何，系统均会触发强制平仓报警，以规避期权末期加速的时间价值衰减（Theta Decay）。
                     </p>
                 </div>
             </div>

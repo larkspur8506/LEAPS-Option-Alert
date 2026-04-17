@@ -41,42 +41,58 @@ def check_position_signals(position, current_opt_price: float, qqq_indicators: D
         logger.error(f"Error preparing data for position {position.id}: {e}")
         return {'alerts': [], 'new_max_profit': 0.0}
 
-    # 4. 强制止损/时间风控 (Hard Stop)
-    # 当期权合约距离到期日仅剩 6 个月 (约 180 天) 时，无论盈亏状态如何，必须强制平仓
-    if dte <= 180:
+    # === 新增：QQQ SMA200 连续3天跌破 止损 ===
+    is_below_sma200_3d = qqq_indicators.get("is_below_sma200_3d", False)
+    if is_below_sma200_3d:
         alerts.append({
-            "rule_name": "Time Stop (180 DTE)",
-            "message": f"⛔ [强制平仓] 距离到期日仅剩 {dte} 天 (<=180天)，触发时间风控",
+            "rule_name": "QQQ SMA200 Stop Loss",
+            "message": f"🚨 [风控平仓] QQQ 连续 3 天跌破 SMA200，触发大盘趋势止损",
             "severity": "CRITICAL",
-            "trigger_condition": f"DTE {dte} <= 180",
+            "trigger_condition": f"QQQ < SMA200 for 3 days",
+            "alert_type": "OPTION_STOP_LOSS"
+        })
+
+    # 4. 强制止损/时间风控 (Hard Stop)
+    # 当期权合约距离到期日仅剩不足 3 个月 (90天) 时，无论盈亏状态如何，必须强制平仓
+    if dte <= 90:
+        alerts.append({
+            "rule_name": "Time Stop (90 DTE)",
+            "message": f"⛔ [强制平仓] 距离到期日仅剩 {dte} 天 (<=90天)，触发时间风控",
+            "severity": "CRITICAL",
+            "trigger_condition": f"DTE {dte} <= 90",
             "alert_type": "OPTION_TIME",
             "dte": dte,
             "expiration_date": expiration_date.strftime("%Y-%m-%d")
         })
     else:
+        # 计算精确自然月
+        months_held = (today.year - entry_date.year) * 12 + today.month - entry_date.month
+        if today.day < entry_date.day:
+            months_held -= 1
+            
         # 3. 出场逻辑 (Exit/Profit Taking) - 阶梯止盈
         tp_threshold = None
         duration_desc = ""
         
-        if held_days < 365:
+        if months_held < 4:
             tp_threshold = 1.00  # 100%
-            duration_desc = "< 12 个月"
-        elif 365 <= held_days <= 456:
+            duration_desc = "不足4个月"
+        elif 4 <= months_held <= 6:
             tp_threshold = 0.50  # 50%
-            duration_desc = "12-15 个月"
-        elif 456 < held_days <= 547:
+            duration_desc = "5-7个月"
+        elif months_held == 7:
             tp_threshold = 0.30  # 30%
-            duration_desc = "16-18 个月"
+            duration_desc = "8个月"
         else:
-            tp_threshold = 0.30  # 默认兜底
-            duration_desc = "> 18 个月"
+            tp_threshold = 0.10  # 10%
+            duration_desc = "9个月及以上"
             
         if tp_threshold is not None and pnl_pct >= tp_threshold:
             alerts.append({
                 "rule_name": "Tiered Take Profit",
                 "message": f"🎯 [阶梯止盈] 持仓 {duration_desc}，收益达标 ({tp_threshold*100:.0f}%)",
                 "severity": "HIGH",
-                "trigger_condition": f"持仓 {held_days}天 ({duration_desc}) AND 盈利 {pnl_pct*100:.1f}% >= {tp_threshold*100:.0f}%",
+                "trigger_condition": f"持仓 {months_held}个整月 ({duration_desc}) AND 盈利 {pnl_pct*100:.1f}% >= {tp_threshold*100:.0f}%",
                 "alert_type": "OPTION_TAKE_PROFIT",
                 "profit_pct": pnl_pct * 100,
                 "days_held": held_days

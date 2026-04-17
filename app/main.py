@@ -227,6 +227,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     
     qqq_price = None
     rsi = None
+    is_above_sma200 = None
     
     if data_fetcher:
         try:
@@ -234,6 +235,7 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
             if qqq_data:
                 qqq_price = qqq_data.get("last_price")
                 rsi = qqq_data.get("rsi")
+                is_above_sma200 = qqq_data.get("is_above_sma200_3d")
                 
         except Exception as e:
             print(f"Market data fetch error: {e}")
@@ -244,7 +246,8 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
         "today_logs": today_logs,
         "market_open": market_open,
         "qqq_price": qqq_price,
-        "rsi": rsi
+        "rsi": rsi,
+        "is_above_sma200": is_above_sma200
     })
 
 

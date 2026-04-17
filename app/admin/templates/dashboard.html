@@ -58,11 +58,30 @@
                     <div class="mt-2">
                         {% if rsi < 35 %}
                         <span class="px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
-                            🚨 超卖区 (入场信号触发)
+                            🚨 超卖区
                         </span>
                         {% else %}
                         <span class="px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
                             🟢 正常波动 (观望)
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                
+                {% if is_above_sma200 is not none %}
+                <div class="pt-2 mt-2 border-t border-gray-100">
+                    <div class="flex justify-between text-xs mb-1 items-center">
+                        <span class="text-gray-500">SMA200 趋势:</span>
+                    </div>
+                    <div class="mt-2">
+                        {% if is_above_sma200 %}
+                        <span class="px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+                            📈 站稳 SMA200
+                        </span>
+                        {% else %}
+                        <span class="px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+                            📉 跌破 SMA200
                         </span>
                         {% endif %}
                     </div>
