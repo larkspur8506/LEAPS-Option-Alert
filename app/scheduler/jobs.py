@@ -194,7 +194,15 @@ def send_daily_report_job(data_fetcher: DataFetcher, db, config):
     notifier = get_wechat_notifier(config.get_wechat_webhook_url())
     # bypass dedup or use a special dedup key
     if dedup.should_alert("DAILY_REPORT"):
-        notifier.send_daily_report(report_data)
+        success = notifier.send_daily_report(report_data)
+        
+        # 记录到数据库
+        alert_dict = {
+            "alert_type": "DAILY_REPORT",
+            "rule_name": "盘后交易日报",
+            "message": f"QQQ收盘价: ${report_data['qqq_price']:.2f} | RSI: {report_data['rsi']:.1f} | 均线距离连续: {report_data['consecutive_days']}天"
+        }
+        _log_alert(db, alert_dict, success)
 
 
 def start_scheduler(data_fetcher: DataFetcher, db, config):
