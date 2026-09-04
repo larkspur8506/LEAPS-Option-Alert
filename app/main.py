@@ -18,8 +18,11 @@ from app.admin.auth import (
     get_password_hash, verify_admin_password, is_first_time_setup,
     authenticate_admin
 )
+from app.api.grid_api import router as grid_api_router
 
 app = FastAPI(title="QQQ Option Alert System")
+
+app.include_router(grid_api_router)
 
 templates = Jinja2Templates(directory="app/admin/templates")
 security = HTTPBasic()
