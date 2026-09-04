@@ -152,12 +152,22 @@
         </div>
     </div>
     {% else %}
-    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-12 text-center mb-8">
+    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-10 text-center mb-8">
         <svg class="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17V7m4 10V7m4 10V7M4 21h16a1 1 0 001-1V4a1 1 0 00-1-1H4a1 1 0 00-1 1v16a1 1 0 001 1z"></path>
         </svg>
         <h2 class="text-lg font-bold text-gray-900 mb-1">NO ACTIVE GRID</h2>
-        <p class="text-sm text-gray-500">当前没有 WAITING 或 RUNNING 状态的网格周期。系统将在满足 NDX 入场条件后自动生成 WAITING 周期。</p>
+        <p class="text-sm text-gray-600 font-medium mb-3">当前没有 WAITING 或 RUNNING 状态的网格周期。</p>
+        {% set info = grid_dash.no_active_info %}
+        {% if info %}
+        <div class="max-w-2xl mx-auto bg-gray-50 rounded-xl border border-gray-100 p-4 text-xs text-gray-600 space-y-1.5 text-left sm:text-center">
+            <p class="font-semibold text-gray-800">{{ info.detail }}</p>
+            {% if info.reason != 'DATA_UNAVAILABLE' %}
+            <p class="text-gray-500">满足 Entry Signal 后，系统会自动生成 WAITING 周期，届时这里会出现“确认启动 Grid (录入实际参数)”按钮。</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
         {% if history.cycles %}
         <div class="inline-block text-left bg-gray-50 rounded-xl border border-gray-100 px-5 py-3 text-xs text-gray-600 mt-4">
             最近一次记录: <span class="font-bold">#{{ history.cycles[0].id }} {{ history.cycles[0].status }}</span>{% if history.cycles[0].close_reason %} ({{ history.cycles[0].close_reason }}){% endif %}<br>

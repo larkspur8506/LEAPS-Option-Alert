@@ -311,10 +311,13 @@ def get_grid_dashboard(
             except Exception:
                 ndx["entry_signal"] = None
         # 数据新鲜度判定复用 Phase 3 freshness (显示用途)
-        try:
-            ndx["is_data_fresh"] = bool(_is_data_fresh(ndx_data))
-        except Exception:
-            ndx["is_data_fresh"] = False
+        if "is_data_fresh" in ndx_data:
+            ndx["is_data_fresh"] = bool(ndx_data["is_data_fresh"])
+        else:
+            try:
+                ndx["is_data_fresh"] = bool(_is_data_fresh(ndx_data))
+            except Exception:
+                ndx["is_data_fresh"] = False
 
     theoretical: Optional[Dict[str, Any]] = None
     if (
@@ -343,9 +346,28 @@ def get_grid_dashboard(
         except (ValueError, TypeError):
             theoretical = None
 
+    no_active_info: Optional[Dict[str, str]] = None
+    if not running and not waiting:
+        if not ndx.get("is_data_valid") or ndx.get("last_price") is None:
+            no_active_info = {
+                "reason": "DATA_UNAVAILABLE",
+                "detail": "当前 NDX 数据不可用，暂时无法评估 Entry Signal。系统将在获得有效数据后自动重新检查。",
+            }
+        elif not ndx.get("is_data_fresh"):
+            no_active_info = {
+                "reason": "DATA_STALE",
+                "detail": "NDX 当前数据不是最新交易日数据，暂不评估 Entry Signal。请等待下一个美股交易日获得最新数据。",
+            }
+        else:
+            no_active_info = {
+                "reason": "SIGNAL_NOT_MET",
+                "detail": "当前 NDX Entry Signal 未满足，因此系统尚未创建 WAITING 周期。",
+            }
+
     return {
         "ndx": ndx,
         "running_cycle": serialize_cycle(running) if running else None,
         "waiting_cycle": serialize_cycle(waiting) if waiting else None,
         "theoretical_grid_position": theoretical,
+        "no_active_info": no_active_info,
     }

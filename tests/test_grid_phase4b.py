@@ -192,12 +192,31 @@ class TestGridPages(GridWebUiTestBase):
         self.assertIn("最近一次记录", res2.text)
 
     def test_5c_no_active_grid_explanation_text(self):
-        """5c. 无活动 Grid 时显示清晰的解释说明文本, 且无手动创建按钮"""
-        res = self._page("/admin/grid")
-        self.assertIn("当前没有 WAITING 或 RUNNING 状态的网格周期。系统将在满足 NDX 入场条件后自动生成 WAITING 周期。", res.text)
-        # 绝不出现手动创建/强制新建按钮
-        self.assertNotIn("手动创建 Grid", res.text)
-        self.assertNotIn("新建 WAITING", res.text)
+        """5c. 无活动 Grid 时根据数据状态显示三类精细化解释说明, 且无手动创建按钮"""
+        # Case A: Stale data (is_data_fresh=False)
+        stale_data = make_ndx_data()
+        stale_data["is_data_fresh"] = False
+        with patch("app.main.data_fetcher") as mock_f:
+            mock_f.get_ndx_data.return_value = stale_data
+            res_stale = self.client.get("/admin/grid")
+        self.assertIn("NDX 当前数据不是最新交易日数据，暂不评估 Entry Signal", res_stale.text)
+        self.assertNotIn("手动创建 Grid", res_stale.text)
+
+        # Case B: Fresh data + Entry Signal not met
+        fresh_data = make_ndx_data()
+        fresh_data["is_data_fresh"] = True
+        fresh_data["rsi"] = 50.0  # > 35, not met
+        with patch("app.main.data_fetcher") as mock_f:
+            mock_f.get_ndx_data.return_value = fresh_data
+            res_fresh = self.client.get("/admin/grid")
+        self.assertIn("当前 NDX Entry Signal 未满足，因此系统尚未创建 WAITING 周期", res_fresh.text)
+        self.assertIn("届时这里会出现“确认启动 Grid (录入实际参数)”按钮", res_fresh.text)
+
+        # Case C: Data unavailable
+        with patch("app.main.data_fetcher") as mock_f:
+            mock_f.get_ndx_data.return_value = None
+            res_unavail = self.client.get("/admin/grid")
+        self.assertIn("当前 NDX 数据不可用，暂时无法评估 Entry Signal", res_unavail.text)
 
     def test_5d_start_modal_margin_placeholder_and_validation(self):
         """5d. Start modal 中 sm-margin 包含 placeholder='请输入实际投入保证金', 且包含严格前端校验 JS 规则"""
