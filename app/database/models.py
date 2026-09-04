@@ -33,6 +33,10 @@ class Configuration(Base):
     alert_log_retention_days = Column(Integer, default=90)
     daily_qqq_data_retention_days = Column(Integer, default=30)
 
+    # Phase 6: 每日 16:30 日报模式 ('off' / 'legacy' / 'ndx_grid')
+    # NULL 或非法值一律视为 'legacy' (保持升级前行为)
+    daily_report_mode = Column(String(20), nullable=True, default="legacy")
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

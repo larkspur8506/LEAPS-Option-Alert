@@ -28,6 +28,10 @@ class WeChatNotifier:
         message = self._format_daily_report(report_data)
         return self._send_message(message)
 
+    def send_ndx_grid_report(self, report_data: Dict) -> bool:
+        message = self._format_ndx_grid_report(report_data)
+        return self._send_message(message)
+
     def send_ndx_entry_alert(self, cycle, current_price: float) -> bool:
         message = self._format_ndx_entry_alert(cycle, current_price)
         return self._send_message(message)
@@ -254,6 +258,114 @@ GridCycle ID：{cycle_id}
 状态：STOPPED
 原因：LOWER_BREACHED"""
 
+    def _format_ndx_grid_report(self, data: Dict) -> str:
+        """
+        NDX Grid Daily Report (Phase 6)。
+        纯展示层: 只格式化 dashboard 数据, 不计算任何网格/信号逻辑。
+        数据缺失/异常时渲染 N/A / NOT EVALUATED, 不误报。
+        """
+        ndx = data.get("dashboard", {}).get("ndx") or {}
+        running = data.get("dashboard", {}).get("running_cycle")
+        waiting = data.get("dashboard", {}).get("waiting_cycle")
+        theo = data.get("dashboard", {}).get("theoretical_grid_position")
+        latest = data.get("latest_cycle") or {}
+        strategy = data.get("strategy", {})
+
+        def price(v):
+            return f"{v:,.2f}" if isinstance(v, (int, float)) else "N/A"
+
+        # NDX Market (数据异常时不显示误导性数据)
+        data_valid = bool(ndx.get("is_data_valid"))
+        data_fresh = bool(ndx.get("is_data_fresh"))
+        data_state = "FRESH" if (data_valid and data_fresh) else ("STALE" if data_valid else "UNAVAILABLE")
+        signal = ndx.get("entry_signal")
+        signal_text = {True: "YES", False: "NO"}.get(signal, "NOT EVALUATED")
+
+        lines = [
+            "NDX Grid Daily Report",
+            data.get("date", ""),
+            "",
+            "NDX Market",
+            f"Price: {price(ndx.get('last_price'))}",
+            f"RSI14: {ndx.get('rsi'):.2f}" if isinstance(ndx.get("rsi"), (int, float)) else "RSI14: N/A",
+            f"SMA200: {price(ndx.get('ma200'))}",
+            f"1Y Ago: {price(ndx.get('price_1y_ago'))}",
+            f"Data: {data_state}",
+            "",
+            "Entry Signal",
+            signal_text,
+            "",
+            "Grid Strategy",
+            f"Upper: +{strategy.get('upper_pct', 0.20) * 100:.0f}%",
+            f"Lower: -{strategy.get('lower_pct', 0.20) * 100:.0f}%",
+            f"Grid Count: {strategy.get('grid_count', 200)}",
+            f"Leverage: {strategy.get('leverage', 5.0):.1f}x",
+            f"Grid Step: N/A",
+        ]
+
+        # Grid Status (以 API status 为准, 无活动时用最近一条历史)
+        if running:
+            lines += [
+                "",
+                "Grid Status",
+                "RUNNING",
+                "",
+                f"Base: {price(running.get('actual_base_price'))}",
+                f"Upper: {price(running.get('actual_upper_price'))}",
+                f"Lower: {price(running.get('actual_lower_price'))}",
+                f"Grid Count: {running.get('actual_grid_count') if running.get('actual_grid_count') is not None else 'N/A'}",
+                f"Leverage: {running.get('actual_leverage'):.1f}x" if isinstance(running.get("actual_leverage"), (int, float)) else "Leverage: N/A",
+                f"Margin: {price(running.get('actual_margin'))}",
+                f"Started: {running.get('started_at') or 'N/A'}",
+            ]
+            if theo:
+                upper = running.get("actual_upper_price")
+                lower = running.get("actual_lower_price")
+                cur = ndx.get("last_price")
+                lines += [
+                    "",
+                    "Theoretical Status",
+                    f"Interval: {theo.get('grid_interval_index') if theo.get('grid_interval_index') is not None else 'N/A'} / {theo.get('grid_count') if theo.get('grid_count') is not None else 'N/A'}",
+                    f"Position: {theo.get('position_ratio'):.2%}" if isinstance(theo.get("position_ratio"), (int, float)) else "Position: N/A",
+                    f"Distance to Upper: {(upper - cur) / upper:.2%}" if isinstance(upper, (int, float)) and isinstance(cur, (int, float)) and upper else "Distance to Upper: N/A",
+                    f"Distance to Lower: {(cur - lower) / lower:.2%}" if isinstance(lower, (int, float)) and isinstance(cur, (int, float)) and lower else "Distance to Lower: N/A",
+                ]
+            lines += [
+                "",
+                "⚠️ 理论状态仅用于提醒，不代表交易所实际持仓或实际盈亏。",
+            ]
+        elif waiting:
+            lines += [
+                "",
+                "Grid Status",
+                "WAITING — 等待用户确认并在交易所启动 Grid",
+                "",
+                f"Suggested Base: {price(waiting.get('suggested_base_price'))}",
+                f"Suggested Upper: {price(waiting.get('suggested_upper_price'))}",
+                f"Suggested Lower: {price(waiting.get('suggested_lower_price'))}",
+                f"Grid Count: {waiting.get('suggested_grid_count') if waiting.get('suggested_grid_count') is not None else 'N/A'}",
+                f"Leverage: {waiting.get('suggested_leverage'):.1f}x" if isinstance(waiting.get("suggested_leverage"), (int, float)) else "Leverage: N/A",
+                f"Grid Step: {price(waiting.get('suggested_grid_step'))}",
+                f"Created: {waiting.get('created_at') or 'N/A'}",
+            ]
+        elif latest:
+            # 无活动 Grid: 用最近历史显示 CLOSED/STOPPED 及原因
+            lines += [
+                "",
+                "Grid Status",
+                latest.get("status", "NO ACTIVE GRID"),
+            ]
+            if latest.get("close_reason"):
+                lines.append(f"Reason: {latest.get('close_reason')}")
+        else:
+            lines += [
+                "",
+                "Grid Status",
+                "NO ACTIVE GRID",
+            ]
+
+        return "\n".join(lines)
+
     def _send_message(self, message: str) -> bool:
         if not self.webhook_url:
             print(f"[WARN] WeChat webhook URL not configured, skipping alert: {message[:100]}")
@@ -288,6 +400,8 @@ GridCycle ID：{cycle_id}
                 return False
                 
         except Exception as e:
+            # 异常消息可能包含完整 webhook URL (含 key=SECRET), 脱敏后再输出
+            print(f"[ERROR] Failed to send WeChat message: {_redact_secrets(str(e))}")
             return False
 
 

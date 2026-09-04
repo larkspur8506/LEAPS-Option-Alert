@@ -72,6 +72,8 @@ async def startup_event():
             # Parameters
             "alert_log_retention_days": config_db.alert_log_retention_days,
             "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
+            # Phase 6: 每日日报模式 (NULL -> legacy 向后兼容)
+            "daily_report_mode": getattr(config_db, 'daily_report_mode', None),
         }
 
         config = get_config(config_dict)
@@ -307,7 +309,71 @@ async def rules(request: Request, db: Session = Depends(get_db)):
         "grid_lower_pct": runtime_config.get_default_grid_lower_pct(),
         "grid_count": runtime_config.get_default_grid_count(),
         "grid_leverage": runtime_config.get_default_grid_leverage(),
+        # Phase 6: 每日日报模式 (运行时配置, 默认 legacy 向后兼容)
+        "daily_report_mode": runtime_config.get_daily_report_mode(),
+        "report_saved": request.query_params.get("saved") == "1",
     })
+
+
+@app.post("/admin/rules/daily-report-mode")
+async def update_daily_report_mode(
+    request: Request,
+    daily_report_mode: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """保存每日 16:30 日报模式 (off / legacy / ndx_grid)"""
+    if not verify_admin_cookie(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    if daily_report_mode not in ("off", "legacy", "ndx_grid"):
+        daily_report_mode = "legacy"  # 非法值回退默认, 保持向后兼容
+
+    config_db = db.query(Configuration).first()
+    if config_db:
+        config_db.daily_report_mode = daily_report_mode
+        db.commit()
+        print(f"[INFO] Daily report mode updated to: {daily_report_mode}")
+
+    return RedirectResponse(url="/admin/rules?saved=1", status_code=303)
+
+
+@app.post("/admin/rules")
+async def update_rules(
+    request: Request,
+    # New entry rules
+    entry_level1_enabled: bool = Form(False),
+    entry_level2_enabled: bool = Form(False),
+    entry_level3_enabled: bool = Form(False),
+    # New exit rules
+    exit_hard_tp_enabled: bool = Form(False),
+    exit_fast_tp_enabled: bool = Form(False),
+    exit_trailing_tp_enabled: bool = Form(False),
+    exit_tech_tp_enabled: bool = Form(False),
+    exit_dte_warning_enabled: bool = Form(False),
+    exit_dte_force_enabled: bool = Form(False),
+    exit_trend_stop_enabled: bool = Form(False),
+    db: Session = Depends(get_db)
+):
+    if not verify_admin_cookie(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    config_db = db.query(Configuration).first()
+
+    config_db.entry_level1_enabled = entry_level1_enabled
+    config_db.entry_level2_enabled = entry_level2_enabled
+    config_db.entry_level3_enabled = entry_level3_enabled
+    
+    config_db.exit_hard_tp_enabled = exit_hard_tp_enabled
+    config_db.exit_fast_tp_enabled = exit_fast_tp_enabled
+    config_db.exit_trailing_tp_enabled = exit_trailing_tp_enabled
+    config_db.exit_tech_tp_enabled = exit_tech_tp_enabled
+    config_db.exit_dte_warning_enabled = exit_dte_warning_enabled
+    config_db.exit_dte_force_enabled = exit_dte_force_enabled
+    config_db.exit_trend_stop_enabled = exit_trend_stop_enabled
+
+    db.commit()
+
+    return RedirectResponse(url="/admin/rules", status_code=303)
 
 
 @app.get("/admin/logs", response_class=HTMLResponse)

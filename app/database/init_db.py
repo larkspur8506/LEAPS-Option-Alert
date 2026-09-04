@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 import os
 
@@ -26,3 +26,29 @@ def init_db():
     os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _apply_lightweight_migrations()
+
+
+def _apply_lightweight_migrations():
+    """
+    轻量列迁移 (Phase 6): create_all 不会给已有表加新列。
+    使用 ADD COLUMN IF NOT EXISTS 语义, 幂等可重复执行。
+    """
+    migrations = [
+        "ALTER TABLE configuration ADD COLUMN daily_report_mode VARCHAR(20)",
+    ]
+    with engine.connect() as conn:
+        for stmt in migrations:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception:
+                # 列已存在 (sqlite OperationalError duplicate column) -> 幂等跳过
+                pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

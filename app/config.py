@@ -107,5 +107,23 @@ class Config:
             return float(self._db_config["default_grid_leverage"])
         return float(os.getenv("DEFAULT_GRID_LEVERAGE", "5.0"))
 
+    # Phase 6: 每日 16:30 日报模式
+    DAILY_REPORT_MODES = ("off", "legacy", "ndx_grid")
+
+    def get_daily_report_mode(self) -> str:
+        """
+        每日日报模式配置。
+        优先级: DB configuration.daily_report_mode > 环境变量 DAILY_REPORT_MODE > 'legacy'。
+        NULL / 缺失 / 非法值一律回退 'legacy' (保持升级前行为, 向后兼容)。
+        """
+        value = self._db_config.get("daily_report_mode")
+        if value in self.DAILY_REPORT_MODES:
+            return value
+        value = os.getenv("DAILY_REPORT_MODE", "")
+        if value in self.DAILY_REPORT_MODES:
+            return value
+        return "legacy"
+
+
 def get_config(db_config: Optional[dict] = None) -> Config:
     return Config(db_config)
