@@ -29,7 +29,7 @@ class WeChatNotifier:
         return self._send_message(message)
 
     def send_ndx_grid_report(self, report_data: Dict) -> bool:
-        message = self._format_ndx_grid_report(report_data)
+        message = self.format_ndx_grid_report(report_data)
         return self._send_message(message)
 
     def send_ndx_entry_alert(self, cycle, current_price: float) -> bool:
@@ -258,7 +258,7 @@ GridCycle ID：{cycle_id}
 状态：STOPPED
 原因：LOWER_BREACHED"""
 
-    def _format_ndx_grid_report(self, data: Dict) -> str:
+    def format_ndx_grid_report(self, data: Dict) -> str:
         """
         NDX Grid Daily Report (Phase 6)。
         纯展示层: 只格式化 dashboard 数据, 不计算任何网格/信号逻辑。

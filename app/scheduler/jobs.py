@@ -261,14 +261,13 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
 
     # 共享 dedup key "DAILY_REPORT" (与 legacy 相同): 一天最多一份, 切换模式不重复发送
     if dedup.should_alert("DAILY_REPORT"):
+        # 先格式化完整日报文本 (与企业微信实际发送内容相同的唯一来源)
+        formatted_message = notifier.format_ndx_grid_report(report_data)
         success = notifier.send_ndx_grid_report(report_data)
-        grid_status = (dashboard.get("running_cycle") or {}).get("status") \
-            or (dashboard.get("waiting_cycle") or {}).get("status") \
-            or (latest_cycle or {}).get("status") or "NO_ACTIVE_GRID"
         _log_alert(db, {
             "alert_type": "NDX_GRID_DAILY_REPORT",
             "rule_name": "NDX Grid Daily Report",
-            "message": f"NDX Grid Daily Report {report_date}: grid_status={grid_status}"
+            "message": formatted_message  # 与企业微信发送内容完全一致
         }, success)
         logger.info(f"DAILY_REPORT mode=ndx_grid date={report_date} sent={success}")
     else:
