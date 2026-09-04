@@ -274,111 +274,18 @@ async def positions_redirect(request: Request):
     return RedirectResponse(url="/admin/grid", status_code=302)
 
 
-@app.post("/admin/positions")
-async def add_position(
-    request: Request,
-    underlying: str = Form("QQQ"),
-    option_type: str = Form(...),
-    strike_price: float = Form(...),
-    expiration_date: str = Form(...),
-    entry_price: float = Form(...),
-    quantity: Optional[int] = Form(None),
-    entry_date: str = Form(...),
-    db: Session = Depends(get_db)
-):
-    if not verify_admin_cookie(request):
-        return RedirectResponse(url="/admin/login", status_code=302)
-
-    try:
-        exp_date_obj = date.fromisoformat(expiration_date)
-        yahoo_exp_date = exp_date_obj.strftime("%y%m%d")
-        
-        strike_str = f"{int(strike_price * 1000):08d}"
-        yahoo_ticker = f"{underlying}{yahoo_exp_date}{option_type[0].upper()}{strike_str}"
-        
-        print(f"期权代码: {yahoo_ticker}")
-
-        position = OptionPosition(
-            underlying=underlying.upper(),
-            option_type=option_type.upper(),
-            strike_price=strike_price,
-            expiration_date=exp_date_obj,
-            entry_price=entry_price,
-            quantity=quantity if quantity and quantity > 0 else 1,
-            entry_date=date.fromisoformat(entry_date)
-        )
-
-        db.add(position)
-        db.commit()
-
-        return RedirectResponse(url="/admin/positions", status_code=303)
-        
-    except Exception as e:
-        print(f"添加期权错误: {e}")
-        return RedirectResponse(url="/admin/positions", status_code=303)
-
-
-@app.post("/admin/positions/{position_id}/delete")
-async def delete_position(
-    position_id: int,
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    if not verify_admin_cookie(request):
-        return RedirectResponse(url="/admin/login", status_code=302)
-
-    position = db.query(OptionPosition).filter(OptionPosition.id == position_id).first()
-    if position:
-        db.delete(position)
-        db.commit()
-
-    return RedirectResponse(url="/admin/positions", status_code=303)
-
-
-@app.post("/admin/positions/{position_id}/refresh")
-async def refresh_position_price(
-    position_id: int,
-    request: Request,
-    db: Session = Depends(get_db)
-):
-    if not verify_admin_cookie(request):
-        return {"success": False, "error": "Unauthorized"}
-
-    position = db.query(OptionPosition).filter(OptionPosition.id == position_id).first()
-    if not position:
-        return {"success": False, "error": "Position not found"}
-
-    if not data_fetcher:
-        return {"success": False, "error": "Data fetcher not initialized"}
-
-    try:
-        current_price = data_fetcher.get_option_current_price(position)
-
-        if current_price is not None:
-            from datetime import datetime
-            position.current_price = current_price
-            position.last_price_update = get_current_time_et()
-            db.commit()
-
-            pnl_amount = (current_price - position.entry_price) * (position.quantity or 1) * 100
-            pnl_pct = ((current_price - position.entry_price) / position.entry_price * 100) if position.entry_price > 0 else 0
-
-            current_pnl_decimal = pnl_pct / 100.0
-            if current_pnl_decimal > (position.max_profit or 0.0):
-                position.max_profit = current_pnl_decimal
-                db.commit()
-
-            return {
-                "success": True,
-                "current_price": current_price,
-                "pnl_amount": pnl_amount,
-                "pnl_pct": pnl_pct,
-                "max_profit_pct": (position.max_profit or 0.0) * 100
-            }
-        else:
-            return {"success": False, "error": "Failed to fetch price"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# ---------------------------------------------------------------------
+# Legacy option position POST endpoints retired (Phase 5 audit).
+#
+# 调用方追踪结论: 唯一调用方是 positions.html (该页面已因 GET redirect
+# 不可达); 无 scheduler / API / 其他 Python 模块引用。期权仓位功能已由
+# NDX Grid 体系替代, 旧的建仓/删除/刷新入口一并退役。
+#
+# 保留项:
+#   - OptionPosition 表与历史数据完整保留 (只读, 不删除)
+#   - jobs.check_qqq_and_options 对 OptionPosition 的读取逻辑保留
+#   - /admin/positions GET 保留 redirect 兼容旧链接
+# ---------------------------------------------------------------------
 
 
 @app.get("/admin/rules", response_class=HTMLResponse)

@@ -246,7 +246,8 @@ def check_ndx_grid_cycles(data_fetcher: DataFetcher, db=None, config=None, check
         return result
 
     except Exception as e:
-        session.rollback()
+        # 注意: process_ndx_grid_cycle 内部的状态变更已各自 commit,
+        # 此处禁止 rollback (避免回滚无关的未提交事务); 仅记录并继续下一轮。
         logger.error(f"Unexpected error in check_ndx_grid_cycles: {e}", exc_info=True)
         return {"status": "ERROR", "error": str(e)}
 

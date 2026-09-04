@@ -47,13 +47,15 @@ logs/
 *.swo
 *~
 
+# AI agent 本地私有配置
+opencode.json
+
 # 测试
 .pytest_cache/
 .coverage
 htmlcov/
-test_*.py
-check_*.py
-tests/
+/test_*.py
+/check_*.py
 
 # 临时文件
 *.tmp

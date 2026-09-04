@@ -1,7 +1,15 @@
 import json
+import re
 import requests
 from typing import Dict, Optional
 from datetime import datetime
+
+
+def _redact_secrets(text: str) -> str:
+    """移除日志中的 webhook key 等敏感参数, 防止 secret 泄漏到日志"""
+    if not text:
+        return text
+    return re.sub(r"(key=)[^&\s'\"]+", r"\1***", text, flags=re.IGNORECASE)
 
 
 class WeChatNotifier:
