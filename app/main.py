@@ -290,6 +290,32 @@ async def positions_redirect(request: Request):
 # ---------------------------------------------------------------------
 
 
+def refresh_global_config(db: Session):
+    global config
+    config_db = db.query(Configuration).first()
+    if not config_db:
+        return config if config is not None else get_config()
+    config_dict = {
+        "polygon_api_key": config_db.polygon_api_key,
+        "wechat_webhook_url": config_db.wechat_webhook_url,
+        "entry_level1_enabled": getattr(config_db, 'entry_level1_enabled', None),
+        "entry_level2_enabled": getattr(config_db, 'entry_level2_enabled', None),
+        "entry_level3_enabled": getattr(config_db, 'entry_level3_enabled', None),
+        "exit_hard_tp_enabled": getattr(config_db, 'exit_hard_tp_enabled', None),
+        "exit_fast_tp_enabled": getattr(config_db, 'exit_fast_tp_enabled', None),
+        "exit_trailing_tp_enabled": getattr(config_db, 'exit_trailing_tp_enabled', None),
+        "exit_tech_tp_enabled": getattr(config_db, 'exit_tech_tp_enabled', None),
+        "exit_dte_warning_enabled": getattr(config_db, 'exit_dte_warning_enabled', None),
+        "exit_dte_force_enabled": getattr(config_db, 'exit_dte_force_enabled', None),
+        "exit_trend_stop_enabled": getattr(config_db, 'exit_trend_stop_enabled', None),
+        "alert_log_retention_days": config_db.alert_log_retention_days,
+        "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
+        "daily_report_mode": getattr(config_db, 'daily_report_mode', None),
+    }
+    config = get_config(config_dict)
+    return config
+
+
 @app.get("/admin/rules", response_class=HTMLResponse)
 async def rules(request: Request, db: Session = Depends(get_db)):
     if not verify_admin_cookie(request):
@@ -297,8 +323,8 @@ async def rules(request: Request, db: Session = Depends(get_db)):
 
     config_db = db.query(Configuration).first()
 
-    # 优先使用运行时配置 (含 DB 覆盖值); 未启动时退回 env 默认
-    runtime_config = config if config is not None else get_config()
+    # 刷新并获取运行时配置 (确保包含 DB 最新保存值)
+    runtime_config = refresh_global_config(db)
 
     return templates.TemplateResponse(request=request, name="rules.html", context={
         "request": request,
@@ -332,6 +358,7 @@ async def update_daily_report_mode(
     if config_db:
         config_db.daily_report_mode = daily_report_mode
         db.commit()
+        refresh_global_config(db)
         print(f"[INFO] Daily report mode updated to: {daily_report_mode}")
 
     return RedirectResponse(url="/admin/rules?saved=1", status_code=303)
@@ -372,6 +399,7 @@ async def update_rules(
     config_db.exit_trend_stop_enabled = exit_trend_stop_enabled
 
     db.commit()
+    refresh_global_config(db)
 
     return RedirectResponse(url="/admin/rules", status_code=303)
 

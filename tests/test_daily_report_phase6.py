@@ -245,6 +245,54 @@ class TestConfigUpdateViaUI(DailyReportTestBase):
             client.close()
             app.dependency_overrides.clear()
 
+    def test_5b_ui_get_rules_renders_persisted_mode(self):
+        """5b. POST 保存 daily_report_mode 后的 GET /admin/rules 渲染为 selected/checked"""
+        from app.main import app
+        from app.database.init_db import get_db
+        app.dependency_overrides[get_db] = lambda: self.db
+        client = TestClient(app, follow_redirects=True)
+        client.cookies.set("admin_logged_in", "true")
+        try:
+            # 1. 保存 ndx_grid
+            res = client.post("/admin/rules/daily-report-mode", data={"daily_report_mode": "ndx_grid"})
+            self.assertEqual(res.status_code, 200)
+            self.assertIn('value="ndx_grid"\n                        checked', res.text)
+
+            # 2. 刷新 GET /admin/rules -> 必须保持 ndx_grid
+            res_get = client.get("/admin/rules")
+            self.assertEqual(res_get.status_code, 200)
+            self.assertIn('value="ndx_grid"\n                        checked', res_get.text)
+
+            # 3. 保存 off -> 刷新 GET /admin/rules -> 必须保持 off
+            res_off = client.post("/admin/rules/daily-report-mode", data={"daily_report_mode": "off"})
+            self.assertEqual(res_off.status_code, 200)
+            self.assertIn('value="off"\n                        checked', res_off.text)
+
+            # 4. 非法值 fallback legacy
+            res_bogus = client.post("/admin/rules/daily-report-mode", data={"daily_report_mode": "invalid_mode"})
+            self.assertEqual(res_bogus.status_code, 200)
+            self.assertIn('value="legacy"\n                        checked', res_bogus.text)
+        finally:
+            client.close()
+            app.dependency_overrides.clear()
+
+    def test_5c_db_overrides_env_var_priority(self):
+        """5c. Priority test: DB Configuration.daily_report_mode > DAILY_REPORT_MODE env > 'legacy'"""
+        import os
+        from app.config import Config
+        row = self.db.query(Configuration).first()
+        row.daily_report_mode = "ndx_grid"
+        self.db.commit()
+
+        with patch.dict(os.environ, {"DAILY_REPORT_MODE": "off"}):
+            cfg = Config({"daily_report_mode": row.daily_report_mode})
+            # DB (ndx_grid) takes precedence over ENV (off)
+            self.assertEqual(cfg.get_daily_report_mode(), "ndx_grid")
+
+            # If DB value is NULL or invalid -> falls back to ENV (off)
+            cfg_null = Config({"daily_report_mode": None})
+            self.assertEqual(cfg_null.get_daily_report_mode(), "off")
+
 
 class TestNDXReportContent(DailyReportTestBase):
     def _format(self, dashboard, latest_cycle=None):

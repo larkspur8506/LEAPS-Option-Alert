@@ -191,6 +191,30 @@ class TestGridPages(GridWebUiTestBase):
         self.assertIn("NO ACTIVE GRID", res2.text)
         self.assertIn("最近一次记录", res2.text)
 
+    def test_5c_no_active_grid_explanation_text(self):
+        """5c. 无活动 Grid 时显示清晰的解释说明文本, 且无手动创建按钮"""
+        res = self._page("/admin/grid")
+        self.assertIn("当前没有 WAITING 或 RUNNING 状态的网格周期。系统将在满足 NDX 入场条件后自动生成 WAITING 周期。", res.text)
+        # 绝不出现手动创建/强制新建按钮
+        self.assertNotIn("手动创建 Grid", res.text)
+        self.assertNotIn("新建 WAITING", res.text)
+
+    def test_5d_start_modal_margin_placeholder_and_validation(self):
+        """5d. Start modal 中 sm-margin 包含 placeholder='请输入实际投入保证金', 且包含严格前端校验 JS 规则"""
+        c1 = create_waiting_grid_cycle(self.db, dict(SUGGESTED))
+        res = self._page("/admin/grid")
+        html = res.text
+
+        self.assertIn('id="sm-margin"', html)
+        self.assertIn('placeholder="请输入实际投入保证金"', html)
+        self.assertIn('value=""', html)
+
+        # 前端 JS 校验规则检查
+        self.assertIn('Actual Margin 保证金', html)
+        self.assertIn('/^\\d+$/.test(rawCount)', html)
+        self.assertIn('Actual Grid Count 必须为大于等于 1 的整数', html)
+        self.assertIn('Actual Upper Price 必须大于 Actual Base Price', html)
+
 
 class TestGridPageActions(GridWebUiTestBase):
     def test_6_start_button_calls_correct_api(self):
