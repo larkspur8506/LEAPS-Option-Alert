@@ -1,41 +1,34 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Form
+from fastapi import FastAPI, Depends, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy.orm import Session
 from typing import Optional
-from datetime import date
 
-from app.database.init_db import init_db, get_db, engine, SessionLocal
-from app.database.models import Configuration, OptionPosition, AlertLog
+from app.database.init_db import init_db, get_db, SessionLocal
+from app.database.models import Configuration, AlertLog
 from app.config import get_config
-from app.market.polygon_client import CachedPolygonClient
 from app.market.data_fetcher import DataFetcher
 from app.scheduler.jobs import start_scheduler, stop_scheduler
 from app.scheduler.trading_hours import is_market_open_now, get_current_time_et
 from app.admin.auth import (
-    get_password_hash, verify_admin_password, is_first_time_setup,
-    authenticate_admin
+    get_password_hash, verify_admin_password, is_first_time_setup
 )
 from app.api.grid_api import router as grid_api_router
 from app.services import grid_service
 
-app = FastAPI(title="QQQ Option Alert System")
+app = FastAPI(title="NDX Grid Alert System")
 
 app.include_router(grid_api_router)
 
 templates = Jinja2Templates(directory="app/admin/templates")
-security = HTTPBasic()
 
-polygon_client: Optional[CachedPolygonClient] = None
 data_fetcher: Optional[DataFetcher] = None
 config: Optional[get_config] = None
 
 
 @app.on_event("startup")
 async def startup_event():
-    global polygon_client, data_fetcher, config
+    global data_fetcher, config
 
     init_db()
 
@@ -46,7 +39,6 @@ async def startup_event():
         if not config_db:
             config_db = Configuration(
                 admin_password_hash="",
-                polygon_api_key="",
                 wechat_webhook_url=""
             )
             db.add(config_db)
@@ -55,31 +47,14 @@ async def startup_event():
         db.refresh(config_db)
 
         config_dict = {
-            "polygon_api_key": config_db.polygon_api_key,
             "wechat_webhook_url": config_db.wechat_webhook_url,
-            # New entry rules
-            "entry_level1_enabled": getattr(config_db, 'entry_level1_enabled', None),
-            "entry_level2_enabled": getattr(config_db, 'entry_level2_enabled', None),
-            "entry_level3_enabled": getattr(config_db, 'entry_level3_enabled', None),
-            # New exit rules
-            "exit_hard_tp_enabled": getattr(config_db, 'exit_hard_tp_enabled', None),
-            "exit_fast_tp_enabled": getattr(config_db, 'exit_fast_tp_enabled', None),
-            "exit_trailing_tp_enabled": getattr(config_db, 'exit_trailing_tp_enabled', None),
-            "exit_tech_tp_enabled": getattr(config_db, 'exit_tech_tp_enabled', None),
-            "exit_dte_warning_enabled": getattr(config_db, 'exit_dte_warning_enabled', None),
-            "exit_dte_force_enabled": getattr(config_db, 'exit_dte_force_enabled', None),
-            "exit_trend_stop_enabled": getattr(config_db, 'exit_trend_stop_enabled', None),
-            # Parameters
             "alert_log_retention_days": config_db.alert_log_retention_days,
-            "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
-            # Phase 6: 每日日报模式 (NULL -> legacy 向后兼容)
             "daily_report_mode": getattr(config_db, 'daily_report_mode', None),
         }
 
         config = get_config(config_dict)
 
-        polygon_client = CachedPolygonClient(config.get_polygon_api_key())
-        data_fetcher = DataFetcher(polygon_client, db)
+        data_fetcher = DataFetcher()
 
         start_scheduler(data_fetcher, db, config)
 
@@ -94,7 +69,7 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    return {"message": "QQQ Option Alert System", "status": "running"}
+    return {"message": "NDX Grid Alert System", "status": "running"}
 
 
 @app.get("/health")
@@ -127,24 +102,24 @@ async def health_detailed(db: Session = Depends(get_db)):
         "status": "running" if scheduler.running else "stopped"
     }
 
-    # Check market data sources
+    # Check NDX market data source
     if data_fetcher:
         try:
-            qqq_data = data_fetcher.get_qqq_data()
-            results["components"]["qqq_data"] = {
-                "status": "ok" if qqq_data.get("last_price") else "no_data"
+            ndx_data = data_fetcher.get_ndx_data()
+            results["components"]["ndx_data"] = {
+                "status": "ok" if ndx_data.get("last_price") else "no_data"
             }
         except Exception as e:
-            results["components"]["qqq_data"] = {"status": "error", "message": str(e)}
+            results["components"]["ndx_data"] = {"status": "error", "message": str(e)}
             results["status"] = "degraded"
 
-    # Count positions
+    # Check grid cycles
     try:
-        from app.database.models import OptionPosition
-        count = db.query(OptionPosition).count()
-        results["components"]["positions"] = {"status": "ok", "count": count}
+        from app.database.models import GridCycle
+        count = db.query(GridCycle).count()
+        results["components"]["grid_cycles"] = {"status": "ok", "count": count}
     except Exception as e:
-        results["components"]["positions"] = {"status": "error", "message": str(e)}
+        results["components"]["grid_cycles"] = {"status": "error", "message": str(e)}
 
     return results
 
@@ -224,7 +199,6 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     if not verify_admin_cookie(request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    positions_count = db.query(OptionPosition).count()
     today_logs = db.query(AlertLog).filter(
         AlertLog.triggered_at >= get_current_time_et().replace(hour=0, minute=0, second=0, microsecond=0)
     ).count()
@@ -239,16 +213,11 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
 
     return templates.TemplateResponse(request=request, name="dashboard.html", context={
         "request": request,
-        "positions_count": positions_count,
         "today_logs": today_logs,
         "market_open": market_open,
         "grid_dash": grid_dash,
         "ndx": ndx,
         "latest_cycle": latest_cycle,
-        # 兼容旧模板变量 (市场感知卡片)
-        "qqq_price": None,
-        "rsi": ndx.get("rsi"),
-        "is_above_sma200": None
     })
 
 
@@ -267,49 +236,14 @@ async def grid_page(request: Request, db: Session = Depends(get_db)):
     })
 
 
-@app.get("/admin/positions", response_class=HTMLResponse)
-async def positions_redirect(request: Request):
-    if not verify_admin_cookie(request):
-        return RedirectResponse(url="/admin/login", status_code=302)
-
-    # Phase 4B: 旧期权仓位页面退役, 兼容性重定向到 Grid 管理页
-    return RedirectResponse(url="/admin/grid", status_code=302)
-
-
-# ---------------------------------------------------------------------
-# Legacy option position POST endpoints retired (Phase 5 audit).
-#
-# 调用方追踪结论: 唯一调用方是 positions.html (该页面已因 GET redirect
-# 不可达); 无 scheduler / API / 其他 Python 模块引用。期权仓位功能已由
-# NDX Grid 体系替代, 旧的建仓/删除/刷新入口一并退役。
-#
-# 保留项:
-#   - OptionPosition 表与历史数据完整保留 (只读, 不删除)
-#   - jobs.check_qqq_and_options 对 OptionPosition 的读取逻辑保留
-#   - /admin/positions GET 保留 redirect 兼容旧链接
-# ---------------------------------------------------------------------
-
-
 def refresh_global_config(db: Session):
     global config
     config_db = db.query(Configuration).first()
     if not config_db:
         return config if config is not None else get_config()
     config_dict = {
-        "polygon_api_key": config_db.polygon_api_key,
         "wechat_webhook_url": config_db.wechat_webhook_url,
-        "entry_level1_enabled": getattr(config_db, 'entry_level1_enabled', None),
-        "entry_level2_enabled": getattr(config_db, 'entry_level2_enabled', None),
-        "entry_level3_enabled": getattr(config_db, 'entry_level3_enabled', None),
-        "exit_hard_tp_enabled": getattr(config_db, 'exit_hard_tp_enabled', None),
-        "exit_fast_tp_enabled": getattr(config_db, 'exit_fast_tp_enabled', None),
-        "exit_trailing_tp_enabled": getattr(config_db, 'exit_trailing_tp_enabled', None),
-        "exit_tech_tp_enabled": getattr(config_db, 'exit_tech_tp_enabled', None),
-        "exit_dte_warning_enabled": getattr(config_db, 'exit_dte_warning_enabled', None),
-        "exit_dte_force_enabled": getattr(config_db, 'exit_dte_force_enabled', None),
-        "exit_trend_stop_enabled": getattr(config_db, 'exit_trend_stop_enabled', None),
         "alert_log_retention_days": config_db.alert_log_retention_days,
-        "daily_qqq_data_retention_days": config_db.daily_qqq_data_retention_days,
         "daily_report_mode": getattr(config_db, 'daily_report_mode', None),
     }
     config = get_config(config_dict)
@@ -321,21 +255,18 @@ async def rules(request: Request, db: Session = Depends(get_db)):
     if not verify_admin_cookie(request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    config_db = db.query(Configuration).first()
-
     # 刷新并获取运行时配置 (确保包含 DB 最新保存值)
     runtime_config = refresh_global_config(db)
 
     return templates.TemplateResponse(request=request, name="rules.html", context={
         "request": request,
-        "config": config_db,
         # NDX Grid 策略参数: 以后端配置为唯一来源 (env/DB), 前端只展示
         "grid_rsi_threshold": runtime_config.get_rsi_threshold(),
         "grid_upper_pct": runtime_config.get_default_grid_upper_pct(),
         "grid_lower_pct": runtime_config.get_default_grid_lower_pct(),
         "grid_count": runtime_config.get_default_grid_count(),
         "grid_leverage": runtime_config.get_default_grid_leverage(),
-        # Phase 6: 每日日报模式 (运行时配置, 默认 legacy 向后兼容)
+        # 每日日报模式 (运行时配置, 默认 ndx_grid)
         "daily_report_mode": runtime_config.get_daily_report_mode(),
         "report_saved": request.query_params.get("saved") == "1",
     })
@@ -347,12 +278,15 @@ async def update_daily_report_mode(
     daily_report_mode: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """保存每日 16:30 日报模式 (off / legacy / ndx_grid)"""
+    """保存每日 16:30 日报模式 (off / ndx_grid)"""
     if not verify_admin_cookie(request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    if daily_report_mode not in ("off", "legacy", "ndx_grid"):
-        daily_report_mode = "legacy"  # 非法值回退默认, 保持向后兼容
+    if daily_report_mode == "legacy":
+        # 历史配置兼容: legacy 日报已删除, 归一化为 ndx_grid
+        daily_report_mode = "ndx_grid"
+    if daily_report_mode not in ("off", "ndx_grid"):
+        daily_report_mode = "ndx_grid"  # 非法值回退默认
 
     config_db = db.query(Configuration).first()
     if config_db:
@@ -362,46 +296,6 @@ async def update_daily_report_mode(
         print(f"[INFO] Daily report mode updated to: {daily_report_mode}")
 
     return RedirectResponse(url="/admin/rules?saved=1", status_code=303)
-
-
-@app.post("/admin/rules")
-async def update_rules(
-    request: Request,
-    # New entry rules
-    entry_level1_enabled: bool = Form(False),
-    entry_level2_enabled: bool = Form(False),
-    entry_level3_enabled: bool = Form(False),
-    # New exit rules
-    exit_hard_tp_enabled: bool = Form(False),
-    exit_fast_tp_enabled: bool = Form(False),
-    exit_trailing_tp_enabled: bool = Form(False),
-    exit_tech_tp_enabled: bool = Form(False),
-    exit_dte_warning_enabled: bool = Form(False),
-    exit_dte_force_enabled: bool = Form(False),
-    exit_trend_stop_enabled: bool = Form(False),
-    db: Session = Depends(get_db)
-):
-    if not verify_admin_cookie(request):
-        return RedirectResponse(url="/admin/login", status_code=302)
-
-    config_db = db.query(Configuration).first()
-
-    config_db.entry_level1_enabled = entry_level1_enabled
-    config_db.entry_level2_enabled = entry_level2_enabled
-    config_db.entry_level3_enabled = entry_level3_enabled
-    
-    config_db.exit_hard_tp_enabled = exit_hard_tp_enabled
-    config_db.exit_fast_tp_enabled = exit_fast_tp_enabled
-    config_db.exit_trailing_tp_enabled = exit_trailing_tp_enabled
-    config_db.exit_tech_tp_enabled = exit_tech_tp_enabled
-    config_db.exit_dte_warning_enabled = exit_dte_warning_enabled
-    config_db.exit_dte_force_enabled = exit_dte_force_enabled
-    config_db.exit_trend_stop_enabled = exit_trend_stop_enabled
-
-    db.commit()
-    refresh_global_config(db)
-
-    return RedirectResponse(url="/admin/rules", status_code=303)
 
 
 @app.get("/admin/logs", response_class=HTMLResponse)

@@ -27,6 +27,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 EXPOSE 8000
 
 # 启动应用
-# 注意：必需通过环境变量提供配置（如WECHAT_WEBHOOK_URL、POLYGON_API_KEY等）
+# 注意：必需通过环境变量提供配置（如WECHAT_WEBHOOK_URL等）
 # 可通过 --env-file 或 -e 参数设置
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

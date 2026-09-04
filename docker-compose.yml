@@ -1,11 +1,13 @@
 version: '3.8'
 
 services:
-  qqq-alert:
+  ndx-grid-alert:
     build: .
+    container_name: ndx-grid-alert
     ports:
       - "8000:8000"
     volumes:
+      # 兼容性说明: 卷名保持历史名称不变, 避免现有部署因改名而挂载到新空卷导致数据"丢失"
       - leaps:/app/data
     environment:
       - TZ=America/New_York

@@ -11,8 +11,6 @@ Covers:
   fresh engine + fresh session), scheduler continues monitoring after restart
 - WeChat failure never rolls back committed CLOSED state (commit-before-notify)
 - Secret redaction in wechat error logs
-- Legacy option position POST endpoints retired (405) while GET redirect and
-  DB read paths remain intact
 - NDX data quality: NaN Close rows and duplicate dates handled, insufficient
   data never triggers entry signal
 """
@@ -357,56 +355,6 @@ class TestSecretRedaction(unittest.TestCase):
         self.assertIn("key=***", redacted)
         # 无 key 参数的文本不受影响
         self.assertEqual(_redact_secrets("plain error"), "plain error")
-
-
-class TestLegacyOptionEndpoints(unittest.TestCase):
-    """旧 option position POST 端点已退役; 读路径与 GET redirect 保留"""
-
-    def setUp(self):
-        self.engine = create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool
-        )
-        Base.metadata.create_all(bind=self.engine)
-        self.Session = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
-        self.db = self.Session()
-
-        from app.main import app
-        from app.database.init_db import get_db
-        app.dependency_overrides[get_db] = lambda: self.db
-        self.app = app
-        self.client = TestClient(app, follow_redirects=False)
-        self.client.cookies.set("admin_logged_in", "true")
-
-    def tearDown(self):
-        self.client.close()
-        self.app.dependency_overrides.clear()
-        self.db.close()
-        Base.metadata.drop_all(bind=self.engine)
-
-    def test_legacy_post_routes_retired(self):
-        """POST 退役: /admin/positions 405 (路径仅存 GET redirect), 子路径 404 (路由移除)"""
-        self.assertEqual(self.client.post("/admin/positions", data={}).status_code, 405)
-        self.assertEqual(self.client.post("/admin/positions/1/delete").status_code, 404)
-        self.assertEqual(self.client.post("/admin/positions/1/refresh").status_code, 404)
-
-    def test_get_redirect_and_db_read_paths_intact(self):
-        """GET redirect 保留; OptionPosition 表仍可读写 (jobs 读取路径依赖)"""
-        res = self.client.get("/admin/positions")
-        self.assertEqual(res.status_code, 302)
-        self.assertEqual(res.headers["location"], "/admin/grid")
-
-        from app.database.models import OptionPosition
-        from datetime import date
-        pos = OptionPosition(
-            underlying="QQQ", option_type="CALL", strike_price=500.0,
-            expiration_date=date(2027, 1, 15), entry_price=10.0,
-            quantity=1, entry_date=date(2026, 1, 15)
-        )
-        self.db.add(pos)
-        self.db.commit()
-        self.assertEqual(self.db.query(OptionPosition).count(), 1)
 
 
 class TestNDXDataQuality(unittest.TestCase):

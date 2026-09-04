@@ -3,15 +3,12 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime
 import json
 import logging
-import time
 
 from .trading_hours import is_trading_time, get_current_time_et
-from app.market.polygon_client import CachedPolygonClient
 from app.market.data_fetcher import DataFetcher
-from app.alerts import qqq_rules, option_rules, dedup
+from app.alerts import dedup
 from app.alerts.grid_monitor import process_ndx_grid_cycle
 from app.notification.wechat import get_wechat_notifier
-from app.config import get_config
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,105 +24,20 @@ scheduler = BackgroundScheduler(
 )
 
 
-def check_qqq_and_options(data_fetcher: DataFetcher, db, config):
-    if not is_trading_time():
-        logger.info("Outside trading hours, skipping checks")
-        return
-
-    logger.info("Starting QQQ and options checks...")
-    notifier = get_wechat_notifier(config.get_wechat_webhook_url())
-
-    # 1. 获取 QQQ 数据和指标
-    qqq_data = data_fetcher.get_qqq_data()
-
-    if qqq_data.get("last_price"):
-        # 2. 检查 QQQ 入场信号
-        qqq_alerts = qqq_rules.check_all_qqq_rules(qqq_data, config)
-
-        for alert in qqq_alerts:
-            # 使用 rule_name 进行每日去重 (每天最多一次买入指令)
-            if dedup.should_alert(alert["rule_name"]):
-                success = notifier.send_qqq_alert(alert)
-                _log_alert(db, alert, success)
-
-    # 3. 检查持仓期权
-    from app.database.models import OptionPosition
-    positions = db.query(OptionPosition).all()
-
-    for position in positions:
-        try:
-            position_ticker = option_rules.format_position_ticker(position)
-            logger.info(f"Checking position: {position_ticker} (ID: {position.id})")
-
-            # 获取期权当前价格
-            current_price = data_fetcher.get_option_current_price(position)
-
-            if current_price is None:
-                logger.warning(f"Failed to get price for position {position_ticker}, skipping")
-                continue
-
-            # 1. 立即更新并提交当前价格，确保数据一致性
-            position.current_price = current_price
-            position.last_price_update = get_current_time_et()
-            db.commit()
-            logger.debug(f"Updated price for {position_ticker} to ${current_price:.2f}")
-            
-            # 2. 检查出场/风控信号
-            result = option_rules.check_position_signals(position, current_price, qqq_data, config)
-            
-            # 3. 更新 max_profit
-            new_max_profit = result.get("new_max_profit", 0.0)
-            if new_max_profit > (position.max_profit or 0.0):
-                logger.info(f"Updating max_profit for {position_ticker}: {position.max_profit} -> {new_max_profit}")
-                position.max_profit = new_max_profit
-                db.commit()
-            
-            # 4. 处理报警
-            option_alerts = result.get("alerts", [])
-            if option_alerts:
-                logger.info(f"Found {len(option_alerts)} alerts for {position_ticker}")
-                
-            for alert in option_alerts:
-                rule_name = alert["rule_name"]
-
-                # 针对每个 position 去重
-                if dedup.should_alert(rule_name, position.id):
-                    success = notifier.send_option_alert(alert, position_ticker)
-                    alert["position_id"] = position.id
-                    _log_alert(db, alert, success)
-                    logger.info(f"Alert sent for {position_ticker}: {rule_name}")
-
-            # 5. 性能优化：API 频率限制
-            time.sleep(1.0)
-
-        except Exception as e:
-            logger.error(f"Error processing position {position.id}: {str(e)}", exc_info=True)
-            db.rollback()
-            continue
-
-    logger.info("Checks completed")
-
-
 def cleanup_old_data(db, config):
     logger.info("Starting data cleanup...")
 
     alert_log_retention = config.get_alert_log_retention_days()
-    qqq_data_retention = config.get_daily_qqq_data_retention_days()
 
-    from app.database.models import AlertLog, DailyQQQData
+    from app.database.models import AlertLog
     from datetime import timedelta
     from pytz import timezone
 
     et_tz = timezone("America/New_York")
     cutoff_date = datetime.now(et_tz) - timedelta(days=alert_log_retention)
-    qqq_cutoff_date = datetime.now(et_tz) - timedelta(days=qqq_data_retention)
 
     deleted_alerts = db.query(AlertLog).filter(
         AlertLog.triggered_at < cutoff_date
-    ).delete()
-
-    deleted_qqq_data = db.query(DailyQQQData).filter(
-        DailyQQQData.fetched_at < qqq_cutoff_date
     ).delete()
 
     db.commit()
@@ -133,14 +45,13 @@ def cleanup_old_data(db, config):
     dedup.reset_daily_dedup()
 
     logger.info(f"Deleted {deleted_alerts} old alert logs")
-    logger.info(f"Deleted {deleted_qqq_data} old QQQ data records")
 
 
 def _log_alert(db, alert: dict, success: bool):
     from app.database.models import AlertLog
 
     alert_log = AlertLog(
-        alert_type=alert.get("alert_type", "QQQ_DROP"),
+        alert_type=alert.get("alert_type", "SYSTEM_ALERT"),
         rule_name=alert.get("rule_name", ""),
         message=json.dumps(alert, default=str),
         sent_successfully=success,
@@ -152,66 +63,6 @@ def _log_alert(db, alert: dict, success: bool):
 
     db.add(alert_log)
     db.commit()
-
-
-def _send_legacy_daily_report(data_fetcher: DataFetcher, db, config, report_date: str):
-    """
-    传统 QQQ / LEAPS 日报 (Phase 6 前的原逻辑, 原样保留)。
-    daily_report_mode = legacy 时调用。
-    """
-    logger.info("Generating legacy daily report...")
-    if not is_trading_time():
-        # Optional: could check if market was open today, but this runs at 16:15 so it's fine.
-        pass
-
-    qqq_data = data_fetcher.get_qqq_data()
-    if not qqq_data.get("last_price"):
-        logger.warning(f"DAILY_REPORT mode=legacy date={report_date} skipped: no QQQ data")
-        return
-
-    from app.database.models import OptionPosition
-    positions_count = db.query(OptionPosition).count()
-
-    # Determine unmet conditions
-    unmet = []
-    if qqq_data.get("rsi", 100) >= 35:
-        unmet.append(f"RSI({qqq_data.get('rsi',0):.1f}) >= 35")
-    if not qqq_data.get("is_above_sma200_3d"):
-        unmet.append("未连续3天站上SMA200")
-    if qqq_data.get("last_price", 0) <= qqq_data.get("price_1y_ago", 0):
-        unmet.append("当前价低于1年前")
-
-    entry_met = len(unmet) == 0
-
-    report_data = {
-        "date": report_date,
-        "qqq_price": qqq_data.get("last_price"),
-        "sma200": qqq_data.get("ma200"),
-        "consecutive_days": qqq_data.get("consec_above") if qqq_data.get("last_price") > qqq_data.get("ma200") else qqq_data.get("consec_below"),
-        "price_1y": qqq_data.get("price_1y_ago"),
-        "rsi": qqq_data.get("rsi"),
-        "entry_met": entry_met,
-        "unmet_conditions": "，".join(unmet),
-        "current_positions": positions_count,
-        "max_positions": 5, # default
-        "stop_warning": qqq_data.get("is_below_sma200_3d", False)
-    }
-
-    notifier = get_wechat_notifier(config.get_wechat_webhook_url())
-    # 共享 dedup key "DAILY_REPORT": 同一天无论 mode 如何切换, 最多发送一份日报
-    if dedup.should_alert("DAILY_REPORT"):
-        success = notifier.send_daily_report(report_data)
-
-        # 记录到数据库
-        alert_dict = {
-            "alert_type": "DAILY_REPORT",
-            "rule_name": "盘后交易日报",
-            "message": f"QQQ收盘价: ${report_data['qqq_price']:.2f} | RSI: {report_data['rsi']:.1f} | 均线距离连续: {report_data['consecutive_days']}天"
-        }
-        _log_alert(db, alert_dict, success)
-        logger.info(f"DAILY_REPORT mode=legacy date={report_date} sent={success}")
-    else:
-        logger.info(f"DAILY_REPORT mode=legacy date={report_date} deduplicated")
 
 
 def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_date: str):
@@ -259,7 +110,7 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
         webhook = config.get_wechat_webhook_url()
     notifier = get_wechat_notifier(webhook)
 
-    # 共享 dedup key "DAILY_REPORT" (与 legacy 相同): 一天最多一份, 切换模式不重复发送
+    # dedup key "DAILY_REPORT": 一天最多一份日报
     if dedup.should_alert("DAILY_REPORT"):
         # 先格式化完整日报文本 (与企业微信实际发送内容相同的唯一来源)
         formatted_message = notifier.format_ndx_grid_report(report_data)
@@ -276,9 +127,9 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
 
 def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):
     """
-    每日 16:30 日报入口 (Phase 6)。
-    读取 daily_report_mode 运行时配置: off / legacy / ndx_grid, 每天只发送一种。
-    默认 legacy (向后兼容, 升级后不改变原行为)。
+    每日 16:30 日报入口。
+    读取 daily_report_mode 运行时配置: off / ndx_grid, 每天只发送一份。
+    默认 ndx_grid (历史 'legacy' 配置由 Config 读取层归一化为 ndx_grid)。
     任何异常只影响本次日报, 不影响其他 scheduler job。
     """
     close_session = False
@@ -288,14 +139,14 @@ def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):
         session = SessionLocal()
         close_session = True
 
-    mode = "legacy"
+    mode = "ndx_grid"
     try:
         if config and hasattr(config, "get_daily_report_mode"):
             configured = config.get_daily_report_mode()
-            if configured in ("off", "legacy", "ndx_grid"):
+            if configured in ("off", "ndx_grid"):
                 mode = configured
     except Exception as e:
-        logger.error(f"DAILY_REPORT failed to read mode, fallback to legacy: {e}")
+        logger.error(f"DAILY_REPORT failed to read mode, fallback to ndx_grid: {e}")
 
     report_date = get_current_time_et().strftime("%Y-%m-%d")
 
@@ -304,10 +155,7 @@ def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):
             logger.info(f"DAILY_REPORT mode=off date={report_date} skipped")
             return {"status": "SKIPPED", "reason": "REPORT_DISABLED"}
 
-        if mode == "ndx_grid":
-            _send_ndx_grid_daily_report(data_fetcher, session, config, report_date)
-        else:
-            _send_legacy_daily_report(data_fetcher, session, config, report_date)
+        _send_ndx_grid_daily_report(data_fetcher, session, config, report_date)
 
         return {"status": "OK", "mode": mode, "date": report_date}
     except Exception as e:
@@ -370,22 +218,10 @@ def check_ndx_grid_cycles(data_fetcher: DataFetcher, db=None, config=None, check
 
 def start_scheduler(data_fetcher: DataFetcher, db, config):
     scheduler.add_job(
-        check_qqq_and_options,
-        "interval",
-        minutes=5,
-        args=[data_fetcher, db, config],
-        id="check_qqq_and_options",
-        name="Check QQQ and Options",
-        replace_existing=True
-    )
-
-    scheduler.add_job(
         check_ndx_grid_cycles,
         "interval",
         minutes=5,
-        # db=None: NDX job 自建自关独立 session。
-        # 两个 5 分钟 job 由 2-worker 线程池并发执行,
-        # 不能与 check_qqq_and_options 共享同一个 Session (非线程安全)。
+        # db=None: NDX job 自建自关独立 session (Phase 5 并发修复), 避免与其他 job 共享非线程安全 Session。
         args=[data_fetcher, None, config],
         id="check_ndx_grid_cycles",
         name="Check NDX Grid Cycles",

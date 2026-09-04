@@ -1,10 +1,15 @@
-# NDX Grid & Option Alert System
+# NDX Nasdaq-100 Long-Only Futures/Perpetual Arithmetic Grid Reminder System
 
-一个基于 FastAPI + APScheduler + Pandas 的 **NDX 长多算术网格人工辅助提醒/监控系统**，同时保留 **传统 QQQ / LEAPS 期权全生命周期监控与提醒能力**。
+一个基于 FastAPI + APScheduler + Pandas 的 **NDX（Nasdaq-100）做多算术网格人工辅助提醒/监控系统**。
 
 > [!IMPORTANT]
-> **定位与边界声明**：  
-> 本系统为**人工辅助提醒与监控系统**，**不自动交易、不自动下单、不连接任何交易所 API、不自动平仓、不计算真实交易所 PnL 与强平点（Liquidation）**。系统的“理论网格状态”仅用于辅助提醒与决策参考，实际网格操作需由用户在交易所手动完成。
+> **定位与边界声明**：
+> 本系统为**人工辅助提醒与监控系统**，**不连接任何交易所 API、不自动交易、不自动下单、不自动平仓、不计算真实交易所 PnL 与强平点（Liquidation）**。系统的“理论网格状态”仅用于辅助提醒与决策参考，实际网格操作需由用户在交易所手动完成。
+
+- **标的**：`^NDX`（Nasdaq-100 指数，对应期货/永续合约做多网格）
+- **方向**：Long-Only（纯做多等差网格）
+- **网格类型**：算术（等差）网格，默认 200 格 / 201 个价格节点
+- **默认参数**：Upper = 基准价 +20%，Lower = 基准价 -20%，建议杠杆 5.0x
 
 ---
 
@@ -17,7 +22,7 @@
 
 ### 2. 开仓信号逻辑 (Entry Signal)
 当 NDX 满足以下 **3 个条件同时成立** 时，生成网格开仓信号（`NDX_GRID_ENTRY`）：
-1. **RSI(14) < 35**（短期极度超卖）。
+1. **RSI(14) < 35**（短期极度超卖，阈值可通过 `RSI_THRESHOLD` 配置）。
 2. **连续 3 个交易日收盘价 > SMA200**（确认长期牛市趋势）。
 3. **当前价格 > 约 1 年前收盘价**（确认中长线大趋势向上）。
 
@@ -28,7 +33,7 @@
 - **系统推荐默认参数 (Suggested Parameters)**：
   - 网格上限 (Upper)：基准价 $+20\%$
   - 网格下限 (Lower)：基准价 $-20\%$
-  - 网格数量 (Grid Count)：200 格
+  - 网格数量 (Grid Count)：200 格（201 个价格节点）
   - 推荐杠杆 (Leverage)：5.0x
 - **实际网格参数 (Actual Parameters)**：
   - 用户在交易所真实创建网格后，在后台管理界面录入并确认启动。
@@ -60,32 +65,25 @@ stateDiagram-v2
 
 ---
 
-## 📅 可配置每日汇报 (Daily Report)
+## 📅 每日汇报 (Daily Report)
 
-系统固定于美东时间交易日 **16:30** 执行每日汇报任务（`send_daily_report`）。支持在后台或环境变量中灵活切换 3 种模式：
+系统固定于美东时间交易日 **16:30** 执行每日汇报任务（`send_daily_report`）。支持两种模式：
 
 ### 1. 汇报模式说明
 - **`off`**：关闭每日汇报推送。
-- **`legacy`**（默认）：发送传统 **QQQ / LEAPS 期权市场感知日报**（展示 QQQ 现价、SMA200 距离、1年涨跌幅、RSI 及现存 LEAPS 期权持仓数），确保升级后向后兼容。
-- **`ndx_grid`**：发送 **NDX Grid 专用日报**。包含：
+- **`ndx_grid`**（默认）：发送 **NDX Grid 专用日报**。包含：
   - NDX 现价、RSI14、SMA200、1 年前价格与数据状态（FRESH / STALE / UNAVAILABLE）
   - 开仓信号状态（YES / NO / NOT EVALUATED）
   - 当前策略参数（Upper/Lower 比例、Grid Count、Leverage）
   - 活动网格周期状态（WAITING 建议参数 / RUNNING 实际参数与理论位置 / CLOSED / STOPPED 终止原因）
   - 明确标注“理论状态仅用于提醒”的免责声明
 
+> [!NOTE]
+> 历史 `legacy` 配置值（旧版 QQQ/LEAPS 日报，已于 Phase 7B 删除）在读取层自动归一化为 `ndx_grid`，无需修改历史数据库。
+
 ### 2. 配置优先级 (Report Mode Priority)
 系统读取 `daily_report_mode` 的优先级如下：
-$$\text{数据库 Configuration.daily\_report\_mode} > \text{环境变量 DAILY\_REPORT\_MODE} > \text{默认 legacy}$$
-
----
-
-## 🛡️ 保留功能：传统 QQQ / LEAPS 监控
-
-NDX Grid 是新增的独立系统模块，系统**完全保留**了原有的 QQQ LEAPS 监控能力：
-- **QQQ 信号监控**：继续定时追踪 QQQ 日线 RSI(14) 超卖与均线回归信号。
-- **OptionPosition 仓位表与读取**：保留 `OptionPosition` 数据表及后台/Scheduler 对该表的读取与风控逻辑（阶梯止盈、DTE 90 天强制平仓、连续 3 天跌破 SMA200 止损）。
-- **路由重定向**：旧的 `/admin/positions` 页面入口采用 HTTP 302 兼容重定向至 `/admin/grid`。
+$$\text{数据库 Configuration.daily\_report\_mode} > \text{环境变量 DAILY\_REPORT\_MODE} > \text{默认 ndx\_grid}$$
 
 ---
 
@@ -93,11 +91,16 @@ NDX Grid 是新增的独立系统模块，系统**完全保留**了原有的 QQQ
 
 系统提供轻量级 HTML 管理后台，使用 Session Cookie 进行权限认证：
 
-- **`/admin/dashboard`**：综合仪表盘。显示 NDX 实时指标、当前 Grid 周期状态、理论持仓比例与旧版大盘感知卡片。
+- **`/admin`**：综合仪表盘。显示 NDX 实时指标、当前 Grid 周期状态与理论持仓比例。
 - **`/admin/grid`**：网格专项管理。查看 WAITING 待启动周期与 RUNNING 运行中周期，提供确认启动（录入 Actual 参数）与手动关闭按钮，以及历史周期列表。
-- **`/admin/rules`**：策略规则与日报配置。可查看 NDX 策略阈值，并支持切换每日 16:30 的 Daily Report 模式（`off` / `legacy` / `ndx_grid`）。
-- **`/admin/positions`**：旧持仓管理入口（HTTP 302 自动重定向至 `/admin/grid`）。
+- **`/admin/rules`**：策略规则与日报配置。可查看 NDX 策略阈值，并支持切换每日 16:30 的 Daily Report 模式（`off` / `ndx_grid`）。
 - **`/admin/logs`**：查看系统历史报警与推送日志。
+
+### REST API (`/api/grid/*`)
+- `GET /api/grid/status`：Dashboard 数据（NDX 指标 + 周期 + 理论位置）
+- `GET /api/grid/waiting` / `GET /api/grid/running` / `GET /api/grid/history`
+- `POST /api/grid/{id}/start`：WAITING → RUNNING（录入 Actual 参数）
+- `POST /api/grid/{id}/close`：RUNNING → CLOSED（MANUAL_CLOSE）
 
 ---
 
@@ -116,7 +119,7 @@ NDX Grid 是新增的独立系统模块，系统**完全保留**了原有的 QQQ
 ## 📁 项目结构
 
 ```
-LEAPS Option Alert/
+NDX Grid Alert/
 ├── app/
 │   ├── admin/              # 后台管理界面 (模板与 Auth)
 │   │   ├── templates/      # Jinja2 HTML 模板
@@ -126,18 +129,14 @@ LEAPS Option Alert/
 │   │   ├── grid_cycle.py   # 网格周期 CRUD 与状态流转
 │   │   ├── grid_math.py    # 算术网格公式计算
 │   │   ├── grid_monitor.py # 5分钟定时监控逻辑
-│   │   ├── ndx_rules.py    # NDX 开仓规则
-│   │   ├── option_rules.py # LEAPS 期权规则
-│   │   └── qqq_rules.py    # QQQ 规则
+│   │   └── ndx_rules.py    # NDX 开仓规则
 │   ├── api/                # REST API
 │   │   └── grid_api.py     # Grid 周期控制与 Dashboard 接口 (/api/grid/*)
 │   ├── database/           # 数据库模型与初始化
 │   │   ├── init_db.py
-│   │   └── models.py       # SQLAlchemy ORM (GridCycle, Configuration 等)
+│   │   └── models.py       # SQLAlchemy ORM (GridCycle, Configuration, AlertLog)
 │   ├── market/             # 行情数据获取
-│   │   ├── data_fetcher.py # yfinance / Polygon 聚合
-│   │   ├── polygon_client.py
-│   │   └── yfinance_client.py
+│   │   └── data_fetcher.py # yfinance ^NDX 日线与技术指标
 │   ├── notification/       # 消息通知
 │   │   └── wechat.py       # 企业微信 Webhook 推送与脱敏
 │   ├── scheduler/          # 定时任务
@@ -150,7 +149,6 @@ LEAPS Option Alert/
 ├── tests/                  # 正式单元测试集
 ├── Dockerfile              # Docker 镜像构建配置 (Python 3.11)
 ├── docker-compose.yml      # 本地 Docker 开发配置
-├── docker-compose.prod.yml # 生产环境 Docker 部署配置
 ├── requirements.txt        # Python 依赖清单
 └── README.md
 ```
@@ -164,13 +162,13 @@ LEAPS Option Alert/
 | 配置项 | 环境变量项 | 默认值 | 作用与说明 |
 | :--- | :--- | :--- | :--- |
 | **企业微信 Webhook** | `WECHAT_WEBHOOK_URL` | `""` | 报警与 Daily Report 推送地址 |
-| **Polygon API Key** | `POLYGON_API_KEY` | `""` | 备用/期权行情 API Key |
-| **RSI 阈值** | `RSI_THRESHOLD` | `35.0` | NDX / QQQ 超卖判定阈值 |
+| **RSI 阈值** | `RSI_THRESHOLD` | `35.0` | NDX 超卖判定阈值 |
 | **默认网格上限比例** | `DEFAULT_GRID_UPPER_PCT` | `0.20` | 建议网格 Upper 上浮比例 (+20%) |
 | **默认网格下限比例** | `DEFAULT_GRID_LOWER_PCT` | `0.20` | 建议网格 Lower 下浮比例 (-20%) |
 | **默认网格格数** | `DEFAULT_GRID_COUNT` | `200` | 建议等差网格分格数量 |
 | **默认网格杠杆** | `DEFAULT_GRID_LEVERAGE` | `5.0` | 建议网格杠杆倍数 |
-| **每日汇报模式** | `DAILY_REPORT_MODE` | `"legacy"` | 可选 `off` / `legacy` / `ndx_grid` |
+| **每日汇报模式** | `DAILY_REPORT_MODE` | `"ndx_grid"` | 可选 `off` / `ndx_grid` |
+| **日志保留天数** | `ALERT_LOG_RETENTION_DAYS` | `90` | AlertLog 清理周期 |
 
 ---
 
@@ -185,7 +183,7 @@ LEAPS Option Alert/
 ```bash
 # 1. 克隆仓库与创建虚拟环境
 git clone <repository-url>
-cd leaps-option-alert
+cd ndx-grid-alert
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
@@ -233,18 +231,13 @@ python -m unittest discover tests -p "test_*.py"
 ```
 
 ### 正式测试覆盖范围 (Phase 1–6)
-正式测试集包含 8 个核心测试文件，共 **131/131** 测试用例全部 PASS：
-- `tests/test_alerts.py`：基础警报与规则测试
-- `tests/test_ndx_phase1.py`：NDX 市场数据与开仓信号测试
+- `tests/test_ndx_phase1.py`：NDX 市场数据、网格数学与开仓信号测试
 - `tests/test_grid_cycle_phase2.py`：网格状态机流转测试
 - `tests/test_grid_phase3.py`：定时监控与 Fail-Closed 测试
 - `tests/test_grid_phase4a.py`：Grid REST API 接口测试
-- `tests/test_grid_phase4b.py`：Admin UI 与兼容重定向测试
+- `tests/test_grid_phase4b.py`：Grid Admin UI 测试
 - `tests/test_grid_phase5.py`：并发、落盘恢复与安全加固测试
-- `tests/test_daily_report_phase6.py`：可配置每日汇报测试
-
-> [!NOTE]
-> `tests/` 目录下的诊断/手工验证脚本（如 `diagnose*.py`、`test_polygon*.py`、`test_wechat*.py` 等）为历史开发工具，不属于自动化构建测试。
+- `tests/test_daily_report_phase6.py`：每日汇报测试
 
 ---
 
@@ -252,9 +245,10 @@ python -m unittest discover tests -p "test_*.py"
 
 - **Phase 1–3**: 引入 NDX 市场数据分析、算术网格逻辑、网格状态机与 5 分钟定时监控。
 - **Phase 4A**: 引入 Grid REST API 接口 (`/api/grid/*`)，实现前后端分离的状态查询与操作控制。
-- **Phase 4B**: 升级 Admin UI (`/admin/dashboard` 与 `/admin/grid`)，全面支持网格可视化与手动确认启动流程。
+- **Phase 4B**: 升级 Admin UI (`/admin` 与 `/admin/grid`)，全面支持网格可视化与手动确认启动流程。
 - **Phase 5**: 生产环境加固。解决 SQLite 并发、Scheduler Session 隔离、Commit-Before-Notify 及重启状态恢复。
-- **Phase 6**: 可配置每日汇报系统。支持在 16:30 灵活切换 `off` / `legacy` / `ndx_grid` 模式。
+- **Phase 6**: 可配置每日汇报系统。支持在 16:30 灵活切换 `off` / `ndx_grid` 模式。
+- **Phase 7**: 彻底移除旧版 QQQ / LEAPS 期权功能，项目正式转为 NDX Grid Only。
 
 ---
 

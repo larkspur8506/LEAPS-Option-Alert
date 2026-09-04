@@ -45,8 +45,8 @@
                         <td class="px-6 py-4 whitespace-nowrap text-sm">
                             <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full
                                 {% if 'ENTRY' in log.alert_type %}bg-blue-100 text-blue-800
-                                {% elif 'OPTION_TAKE_PROFIT' in log.alert_type %}bg-green-100 text-green-800
-                                {% elif 'OPTION_STOP_LOSS' in log.alert_type %}bg-red-100 text-red-800
+                                {% elif 'DAILY_REPORT' in log.alert_type %}bg-purple-100 text-purple-800
+                                {% elif 'UPPER' in log.alert_type or 'LOWER' in log.alert_type %}bg-green-100 text-green-800
                                 {% else %}bg-yellow-100 text-yellow-800{% endif %}">
                                 {{ log.alert_type }}
                             </span>
@@ -132,16 +132,17 @@
                 data = message;
             }
 
-            // Format different types of alerts
-            if (data.alert_type && data.alert_type.includes('ENTRY')) {
-                return formatEntrySignal(data);
-            } else if (data.alert_type && (data.alert_type.includes('TAKE_PROFIT') || data.alert_type.includes('STOP_LOSS'))) {
-                return formatExitSignal(data);
-            } else if (data.alert_type && data.alert_type.includes('TIME') || data.alert_type.includes('DTE')) {
-                return formatDTESignal(data);
-            } else {
-                return formatGenericSignal(data);
+            // 纯文本日报 (NDX Grid Daily Report) 直接等宽展示
+            if (typeof data === 'string' || (data.message && typeof data.message === 'string' && data.message.includes('\n'))) {
+                const text = typeof data === 'string' ? data : data.message;
+                return `
+                    <div class="bg-white border border-gray-200 rounded-lg p-4">
+                        <pre class="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 p-3 rounded">${text}</pre>
+                    </div>
+                `;
             }
+
+            return formatGenericSignal(data);
         } catch (e) {
             return `
                 <div class="bg-white border border-gray-200 rounded-lg p-4">
@@ -150,118 +151,6 @@
                 </div>
             `;
         }
-    }
-
-    // Format entry signals (QQQ_ENTRY)
-    function formatEntrySignal(data) {
-        const price = data.current_price ? `$${parseFloat(data.current_price).toFixed(2)}` : 'N/A';
-        const deltaRec = data.delta_recommendation || {};
-
-        let deltaHtml = '';
-        if (deltaRec.available) {
-            deltaHtml = `
-            <div class="col-span-1 sm:col-span-2 bg-blue-50 border border-blue-100 rounded-lg p-4 mt-2">
-                <h4 class="font-semibold text-blue-800 mb-2 flex items-center gap-2">
-                    <span>📋</span>期权建仓指引
-                </h4>
-                <div class="text-sm text-blue-900 space-y-1">
-                    <p><strong>到期日要求：</strong>${deltaRec.expiration || 'N/A'}</p>
-                    <p><strong>Delta 要求：</strong><span class="font-mono font-bold">${deltaRec.delta_recommend || 'N/A'}</span></p>
-                    <p class="mt-2 pt-2 border-t border-blue-200 text-xs text-blue-700">${deltaRec.explanation || ''}</p>
-                </div>
-            </div>`;
-        }
-
-        return `
-            <div class="bg-white rounded-lg p-0">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">规则名称</span>
-                        <span class="font-medium text-gray-800">${data.rule_name || 'N/A'}</span>
-                    </div>
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">当前大盘价格</span>
-                        <span class="font-bold text-lg text-gray-900">${price}</span>
-                    </div>
-                    <div class="col-span-1 sm:col-span-2 bg-red-50 border border-red-100 rounded p-3">
-                        <span class="text-red-500 block text-xs mb-1">信号触发详情</span>
-                        <span class="font-medium text-red-700">${data.message || 'N/A'}</span>
-                        <p class="text-xs text-red-600 mt-1">条件: ${data.trigger_condition || 'N/A'}</p>
-                    </div>
-                    ${deltaHtml}
-                </div>
-            </div>
-        `;
-    }
-
-    // Format exit signals (TAKE_PROFIT)
-    function formatExitSignal(data) {
-        const currentPrice = data.current_price ? `$${parseFloat(data.current_price).toFixed(2)}` : 'N/A';
-        const entryPrice = data.entry_price ? `$${parseFloat(data.entry_price).toFixed(2)}` : 'N/A';
-        const profit = data.profit_pct !== undefined ? `${parseFloat(data.profit_pct).toFixed(2)}%` : (data.pnl_pct !== undefined ? `${parseFloat(data.pnl_pct).toFixed(2)}%` : 'N/A');
-        const daysHeld = data.days_held !== undefined ? data.days_held : 'N/A';
-        const isProfit = data.alert_type && data.alert_type.includes('TAKE_PROFIT');
-
-        return `
-            <div class="bg-white rounded-lg p-0">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">规则名称</span>
-                        <span class="font-medium text-gray-800">${data.rule_name || 'N/A'}</span>
-                    </div>
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">持仓天数</span>
-                        <span class="font-medium text-gray-800">${daysHeld} 天</span>
-                    </div>
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">入场价格</span>
-                        <span class="font-medium text-gray-700">${entryPrice}</span>
-                    </div>
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">当前价格</span>
-                        <span class="font-bold text-gray-900">${currentPrice}</span>
-                    </div>
-                    <div class="col-span-1 sm:col-span-2 ${isProfit ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'} border rounded p-3 flex justify-between items-center">
-                        <div>
-                            <span class="${isProfit ? 'text-green-600' : 'text-red-600'} block text-xs mb-1">当前盈亏比例</span>
-                            <span class="font-bold text-xl ${isProfit ? 'text-green-700' : 'text-red-700'}">${profit}</span>
-                        </div>
-                        <div class="text-right">
-                            <span class="text-gray-500 text-xs mb-1 block">触发说明</span>
-                            <span class="font-medium text-gray-700 text-sm">${data.message || 'N/A'}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
-    }
-
-    // Format DTE expiration warnings
-    function formatDTESignal(data) {
-        const days = data.dte !== undefined ? data.dte : 'N/A';
-        const expDate = data.expiration_date || 'N/A';
-
-        return `
-            <div class="bg-white rounded-lg p-0">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">规则名称</span>
-                        <span class="font-medium text-gray-800">${data.rule_name || 'N/A'}</span>
-                    </div>
-                    <div class="bg-gray-50 border border-gray-100 rounded p-3">
-                        <span class="text-gray-500 block text-xs mb-1">期权到期日</span>
-                        <span class="font-medium text-gray-800">${expDate}</span>
-                    </div>
-                    <div class="col-span-1 sm:col-span-2 bg-yellow-50 border border-yellow-200 rounded p-4 flex items-center gap-4">
-                        <div class="text-4xl">⚠️</div>
-                        <div>
-                            <span class="text-yellow-800 block font-bold text-lg mb-1">剩余到期天数: ${days} 天</span>
-                            <span class="font-medium text-yellow-700 text-sm">${data.message || '触发时间风控'}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
     }
 
     // Format generic signals

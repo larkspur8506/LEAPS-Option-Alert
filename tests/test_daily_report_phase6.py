@@ -2,15 +2,14 @@
 Phase 6 Tests: Configurable Daily Report.
 
 Covers:
-- Default mode = legacy (backward compatible: NULL config -> legacy)
-- mode = off / legacy / ndx_grid dispatching in scheduler job
+- Default mode = ndx_grid (NULL / missing / invalid config -> ndx_grid; legacy -> ndx_grid)
+- mode = off / ndx_grid dispatching in scheduler job
 - Rules page renders radio controls, POST saves to DB (real runtime config)
-- legacy path calls original report logic unchanged
 - ndx_grid generates NDX Grid daily report (reuses grid_service dashboard)
 - WAITING / RUNNING / CLOSED / STOPPED / NO ACTIVE GRID report content
 - stale / unavailable NDX -> N/A + NOT EVALUATED, never fake "NO" signal
 - suggested_*/actual_* strictly separated in RUNNING report
-- dedup: one report per day, mode switch does not resend
+- dedup: one report per day (shared DAILY_REPORT key)
 - WeChat failure does not affect scheduler / grid monitoring
 - report exception does not affect grid monitoring
 - secrets never in report output
@@ -78,17 +77,11 @@ class DailyReportTestBase(unittest.TestCase):
         self.db = self.Session()
 
         self.mock_fetcher = MagicMock()
-        self.mock_fetcher.get_qqq_data.return_value = {
-            "last_price": 500.0, "rsi": 30.0, "ma200": 480.0,
-            "consec_above": 3, "consec_below": 0,
-            "is_above_sma200_3d": True, "is_below_sma200_3d": False,
-            "price_1y_ago": 450.0,
-        }
         self.mock_fetcher.get_ndx_data.return_value = make_ndx_data()
 
         # Configuration 行 (daily_report_mode 列)
         self.config_row = Configuration(
-            admin_password_hash="x", daily_report_mode=None  # NULL -> legacy 默认
+            admin_password_hash="x", daily_report_mode=None  # NULL -> ndx_grid 默认
         )
         self.db.add(self.config_row)
         self.db.commit()
@@ -98,7 +91,7 @@ class DailyReportTestBase(unittest.TestCase):
         Base.metadata.drop_all(bind=self.engine)
 
     def _config(self, mode=None):
-        """构造运行时 config: mode=None 表示 DB 中无配置 (走 legacy 默认)"""
+        """构造运行时 config: mode=None 表示 DB 中无配置 (走 ndx_grid 默认)"""
         from app.config import Config
         row = self.db.query(Configuration).first()
         self.db.refresh(row) if row else None
@@ -118,12 +111,13 @@ class DailyReportTestBase(unittest.TestCase):
 
 
 class TestConfigDefaults(DailyReportTestBase):
-    def test_1_default_mode_is_legacy(self):
-        """1. 默认 mode = legacy (DB NULL / 缺失 / 非法值)"""
-        self.assertEqual(self._config(None).get_daily_report_mode(), "legacy")  # DB NULL
+    def test_1_default_mode_is_ndx_grid(self):
+        """1. 默认 mode = ndx_grid (DB NULL / 缺失 / 非法值 / 历史 legacy 值均归一化)"""
+        self.assertEqual(self._config(None).get_daily_report_mode(), "ndx_grid")  # DB NULL
         from app.config import Config
-        self.assertEqual(Config({}).get_daily_report_mode(), "legacy")           # 完全缺失
-        self.assertEqual(Config({"daily_report_mode": "bogus"}).get_daily_report_mode(), "legacy")  # 非法
+        self.assertEqual(Config({}).get_daily_report_mode(), "ndx_grid")           # 完全缺失
+        self.assertEqual(Config({"daily_report_mode": "bogus"}).get_daily_report_mode(), "ndx_grid")  # 非法
+        self.assertEqual(Config({"daily_report_mode": "legacy"}).get_daily_report_mode(), "ndx_grid")  # 历史 legacy -> 归一化
         self.assertEqual(Config({"daily_report_mode": "off"}).get_daily_report_mode(), "off")
         self.assertEqual(Config({"daily_report_mode": "ndx_grid"}).get_daily_report_mode(), "ndx_grid")
 
@@ -136,28 +130,7 @@ class TestSchedulerDispatch(DailyReportTestBase):
         with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
             res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("off"))
         self.assertEqual(res["status"], "SKIPPED")
-        notifier.send_daily_report.assert_not_called()
         notifier.send_ndx_grid_report.assert_not_called()
-
-    def test_3_mode_legacy_calls_original_logic(self):
-        """3/7. mode=legacy -> 调用原有日报逻辑 (send_daily_report + QQQ 数据 + alert log)"""
-        self._clear_dedup()
-        notifier = MagicMock()
-        notifier.send_daily_report.return_value = True
-        with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
-            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("legacy"))
-        self.assertEqual(res["status"], "OK")
-        self.mock_fetcher.get_qqq_data.assert_called_once()
-        notifier.send_daily_report.assert_called_once()
-        report = notifier.send_daily_report.call_args[0][0]
-        self.assertEqual(report["qqq_price"], 500.0)   # 原内容结构不变
-        self.assertEqual(report["entry_met"], True)
-        notifier.send_ndx_grid_report.assert_not_called()
-        # 原日报仍写 alert_logs
-        from app.database.models import AlertLog
-        self.assertEqual(
-            self.db.query(AlertLog).filter(AlertLog.alert_type == "DAILY_REPORT").count(), 1
-        )
 
     def test_4_mode_ndx_grid_generates_ndx_report(self):
         """4/8. mode=ndx_grid -> 生成 NDX Grid 日报 (复用 grid_service)"""
@@ -170,7 +143,6 @@ class TestSchedulerDispatch(DailyReportTestBase):
         self.assertEqual(res["status"], "OK")
         notifier.format_ndx_grid_report.assert_called_once()
         notifier.send_ndx_grid_report.assert_called_once()
-        notifier.send_daily_report.assert_not_called()
         report = notifier.send_ndx_grid_report.call_args[0][0]
         self.assertIn("dashboard", report)
         self.assertIn("strategy", report)
@@ -178,18 +150,17 @@ class TestSchedulerDispatch(DailyReportTestBase):
     def test_6_mode_read_at_execution_time(self):
         """6. scheduler 每次执行时读取当前配置 (运行时配置, 非启动时快照)"""
         self._clear_dedup()
-        # 第一次: legacy
         notifier = MagicMock()
-        notifier.send_daily_report.return_value = True
+        notifier.send_ndx_grid_report.return_value = True
+        notifier.format_ndx_grid_report.return_value = "mock ndx grid report"
         with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
-            send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("legacy"))
-        notifier.send_daily_report.assert_called_once()
+            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        notifier.send_ndx_grid_report.assert_called_once()
         # 同一天第二次执行 (任何 mode) -> dedup, 不再发送
         notifier.reset_mock()
         with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
             send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
         notifier.send_ndx_grid_report.assert_not_called()
-        notifier.send_daily_report.assert_not_called()
 
     def test_20_wechat_failure_does_not_break_scheduler(self):
         """20. WeChat 发送失败 -> job 正常返回, 不抛异常"""
@@ -202,11 +173,11 @@ class TestSchedulerDispatch(DailyReportTestBase):
         self.assertEqual(res["status"], "OK")
 
     def test_21_report_exception_does_not_break_scheduler(self):
-        """21. 日报内部异常 -> job 返回 ERROR, 不向上抛, 不影响其他 job"""
+        """21. 日报内部异常 -> job 返回 ERROR, 不向上抛, 不影响其他 job
+        (NDX 数据异常被设计为降级 N/A 继续发报, 因此这里用 dashboard 聚合异常模拟内部错误)"""
         self._clear_dedup()
-        bad_fetcher = MagicMock()
-        bad_fetcher.get_qqq_data.side_effect = RuntimeError("boom")
-        res = send_daily_report_job(bad_fetcher, db=self.db, config=self._config("legacy"))
+        with patch("app.services.grid_service.get_grid_dashboard", side_effect=RuntimeError("boom")):
+            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
         self.assertEqual(res["status"], "ERROR")
 
         # Grid monitoring 不受影响
@@ -273,16 +244,24 @@ class TestConfigUpdateViaUI(DailyReportTestBase):
             self.assertEqual(res_off.status_code, 200)
             self.assertIn('value="off"\n                        checked', res_off.text)
 
-            # 4. 非法值 fallback legacy
+            # 4. 非法值 / 历史 legacy 值 -> 归一化 fallback ndx_grid
             res_bogus = client.post("/admin/rules/daily-report-mode", data={"daily_report_mode": "invalid_mode"})
             self.assertEqual(res_bogus.status_code, 200)
-            self.assertIn('value="legacy"\n                        checked', res_bogus.text)
+            self.assertIn('value="ndx_grid"\n                        checked', res_bogus.text)
+
+            # 5. 历史 legacy 值 -> 保存层归一化为 ndx_grid
+            res_legacy = client.post("/admin/rules/daily-report-mode", data={"daily_report_mode": "legacy"})
+            self.assertEqual(res_legacy.status_code, 200)
+            self.assertIn('value="ndx_grid"\n                        checked', res_legacy.text)
+            row = self.db.query(Configuration).first()
+            self.db.refresh(row)
+            self.assertEqual(row.daily_report_mode, "ndx_grid")
         finally:
             client.close()
             app.dependency_overrides.clear()
 
     def test_5c_db_overrides_env_var_priority(self):
-        """5c. Priority test: DB Configuration.daily_report_mode > DAILY_REPORT_MODE env > 'legacy'"""
+        """5c. Priority test: DB Configuration.daily_report_mode > DAILY_REPORT_MODE env > 'ndx_grid'"""
         import os
         from app.config import Config
         row = self.db.query(Configuration).first()
@@ -409,21 +388,20 @@ class TestNDXReportContent(DailyReportTestBase):
         self.assertIn("Entry Signal\nNOT EVALUATED", msg)
 
     def test_17_18_dedup_single_report_per_day(self):
-        """17/18. 同一天最多一份; legacy 发送后切换 ndx_grid 不再发第二份"""
+        """17/18. 同一天最多一份日报 (dedup key DAILY_REPORT); 第二次调用不再发送"""
         self._clear_dedup()
         notifier = MagicMock()
-        notifier.send_daily_report.return_value = True
         notifier.send_ndx_grid_report.return_value = True
+        notifier.format_ndx_grid_report.return_value = "mock ndx grid report"
         with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
-            send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("legacy"))
-        self.assertEqual(notifier.send_daily_report.call_count, 1)
+            send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        self.assertEqual(notifier.send_ndx_grid_report.call_count, 1)
 
-        # 16:35 用户改成 ndx_grid -> 不自动再发第二份
+        # 同一天再次执行 (如重启后) -> dedup, 不再发送第二份
         notifier.reset_mock()
         with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
             send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
         notifier.send_ndx_grid_report.assert_not_called()
-        notifier.send_daily_report.assert_not_called()
 
     def test_22_no_secrets_in_report(self):
         """22. 日报内容不包含 webhook/secret"""
@@ -571,44 +549,18 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
         for keyword in ["NDX Market", "RSI14", "Grid Status", "Grid Strategy"]:
             self.assertIn(keyword, msg, f"AlertLog.message 应包含字段: {keyword}")
 
-    def test_E_legacy_alertlog_behavior_unchanged(self):
-        """E. Legacy 日报 AlertLog 行为保持不变（单行摘要形式，alert_type=DAILY_REPORT）。"""
-        from app.database.models import AlertLog
-        import json
-
-        self._clear_dedup()
-        notifier = MagicMock()
-        notifier.send_daily_report.return_value = True
-
-        with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
-            send_daily_report_job(
-                self.mock_fetcher,
-                db=self.db,
-                config=self._config("legacy"),
-            )
-
-        log = self.db.query(AlertLog).filter(
-            AlertLog.alert_type == "DAILY_REPORT"
-        ).first()
-        self.assertIsNotNone(log, "Legacy AlertLog 应存在")
-        stored = json.loads(log.message)
-        self.assertEqual(stored["alert_type"], "DAILY_REPORT")
-        self.assertEqual(stored["rule_name"], "盘后交易日报")
-        # Legacy message 字段是单行摘要 (原有行为不变)
-        self.assertIn("QQQ收盘价", stored["message"])
-
     def test_F_dedup_behavior_unchanged(self):
-        """F. dedup 行为不变：同一天 legacy 发送后，ndx_grid 不再发第二份。"""
+        """F. dedup 行为不变：NDX Grid 日报同一天最多发送一份。"""
         from app.database.models import AlertLog
 
         self._clear_dedup()
         notifier = MagicMock()
-        notifier.send_daily_report.return_value = True
         notifier.send_ndx_grid_report.return_value = True
+        notifier.format_ndx_grid_report.return_value = "mock ndx grid report"
 
         with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
-            send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("legacy"))
-        self.assertEqual(notifier.send_daily_report.call_count, 1)
+            send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        self.assertEqual(notifier.send_ndx_grid_report.call_count, 1)
 
         notifier.reset_mock()
         with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
@@ -616,12 +568,6 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
 
         notifier.send_ndx_grid_report.assert_not_called()
         notifier.format_ndx_grid_report.assert_not_called()
-
-        # 数据库中不应多出 NDX_GRID_DAILY_REPORT 记录
-        ndx_count = self.db.query(AlertLog).filter(
-            AlertLog.alert_type == "NDX_GRID_DAILY_REPORT"
-        ).count()
-        self.assertEqual(ndx_count, 0, "dedup 生效后不应写入 NDX_GRID_DAILY_REPORT AlertLog")
 
     def test_G_send_failure_sets_sent_successfully_false(self):
         """G. 推送失败时 sent_successfully=False 正确写入 AlertLog。"""

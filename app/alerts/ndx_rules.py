@@ -1,6 +1,5 @@
 """
 Nasdaq-100 (NDX) Entry Rules and Suggested Grid Generator.
-Decoupled from LEAPS/Option logic.
 """
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -69,7 +68,6 @@ def check_entry_signals(
     """
     开仓信号生成主函数。
     当满足开仓条件时，输出标准信号结构体，包含建议网格参数。
-    不再包含任何 LEAPS、Call、Delta、行权价或到期日字段。
     """
     if not current_price or current_price <= 0:
         return []

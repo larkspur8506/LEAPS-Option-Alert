@@ -3,7 +3,7 @@ Phase 4B Tests: NDX Grid Web UI.
 
 Covers:
 - /admin/grid accessible with admin cookie (server-rendered data)
-- /admin/positions redirects to /admin/grid
+- legacy /admin/positions route removed (404)
 - WAITING rendering (suggested params, NO actual confusion)
 - RUNNING rendering (actual params, frozen, theoretical position from actual params)
 - No active grid: NO ACTIVE GRID + latest history shown
@@ -110,11 +110,10 @@ class TestGridPages(GridWebUiTestBase):
         self.assertEqual(res_no_auth.status_code, 302)
         self.assertEqual(res_no_auth.headers["location"], "/admin/login")
 
-    def test_2_positions_redirects_to_grid(self):
-        """2. /admin/positions 正确重定向到 /admin/grid"""
+    def test_2_positions_route_removed(self):
+        """2. legacy /admin/positions 路由已彻底删除 (Phase 7B), 访问返回 404"""
         res = self._page("/admin/positions")
-        self.assertEqual(res.status_code, 302)
-        self.assertEqual(res.headers["location"], "/admin/grid")
+        self.assertEqual(res.status_code, 404)
 
     def test_3_waiting_rendered_with_suggested_only(self):
         """3. WAITING 正确显示: suggested 参数可见, actual 参数不出现"""
