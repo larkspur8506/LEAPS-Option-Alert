@@ -9,6 +9,7 @@ from .trading_hours import is_trading_time, get_current_time_et
 from app.market.polygon_client import CachedPolygonClient
 from app.market.data_fetcher import DataFetcher
 from app.alerts import qqq_rules, option_rules, dedup
+from app.alerts.grid_monitor import process_ndx_grid_cycle
 from app.notification.wechat import get_wechat_notifier
 from app.config import get_config
 
@@ -205,6 +206,55 @@ def send_daily_report_job(data_fetcher: DataFetcher, db, config):
         _log_alert(db, alert_dict, success)
 
 
+def check_ndx_grid_cycles(data_fetcher: DataFetcher, db=None, config=None, check_trading_hours: bool = True):
+    """
+    后台定时任务: NDX 合约网格监控与状态机驱动。
+    每 5 分钟执行一次。
+    """
+    if check_trading_hours and not is_trading_time():
+        logger.info("Outside trading hours, skipping NDX grid checks")
+        return {"status": "SKIPPED", "reason": "OUTSIDE_TRADING_HOURS"}
+
+    close_session = False
+    session = db
+    if session is None:
+        from app.database.init_db import SessionLocal
+        session = SessionLocal()
+        close_session = True
+
+    try:
+        # 1. 获取 NDX 市场数据
+        try:
+            ndx_data = data_fetcher.get_ndx_data()
+        except Exception as e:
+            logger.error(f"Failed to fetch NDX data: {e}", exc_info=True)
+            return {"status": "SKIPPED", "reason": "DATA_FETCH_ERROR"}
+
+        if not ndx_data or not ndx_data.get("last_price") or ndx_data.get("last_price", 0) <= 0:
+            logger.warning("NDX market data unavailable or invalid, skipping cycle check.")
+            return {"status": "SKIPPED", "reason": "NO_VALID_DATA"}
+
+        # 2. 获取 notifier
+        notifier = None
+        if config and hasattr(config, "get_wechat_webhook_url"):
+            webhook_url = config.get_wechat_webhook_url()
+            if webhook_url:
+                notifier = get_wechat_notifier(webhook_url)
+
+        # 3. 驱动网格监控状态机
+        result = process_ndx_grid_cycle(session, ndx_data, notifier=notifier, config=config)
+        return result
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Unexpected error in check_ndx_grid_cycles: {e}", exc_info=True)
+        return {"status": "ERROR", "error": str(e)}
+
+    finally:
+        if close_session:
+            session.close()
+
+
 def start_scheduler(data_fetcher: DataFetcher, db, config):
     scheduler.add_job(
         check_qqq_and_options,
@@ -217,13 +267,24 @@ def start_scheduler(data_fetcher: DataFetcher, db, config):
     )
 
     scheduler.add_job(
+        check_ndx_grid_cycles,
+        "interval",
+        minutes=5,
+args=[data_fetcher, db, config],
+        id="check_ndx_grid_cycles",
+        name="Check NDX Grid Cycles",
+        replace_existing=True
+    )
+
+    scheduler.add_job(
         send_daily_report_job,
         "cron",
         hour=16,
         minute=30,
         day_of_week='mon-fri',
         timezone="America/New_York",
-        args=[data_fetcher, db, config],
+        # db=None: 与 NDX job 一致, 自建独立 session (Phase 5 并发修复同款)
+        args=[data_fetcher, None, config],
         id="send_daily_report",
         name="Send Daily Report",
         replace_existing=True

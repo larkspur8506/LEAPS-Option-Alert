@@ -23,6 +23,31 @@ class YFinanceClient:
 
         self.last_request_time = now
 
+    def get_ndx_today(self) -> dict:
+        """获取 NDX (^NDX) 当日数据（只获取当日，避免限流）"""
+        self._wait_for_rate_limit()
+
+        try:
+            ticker = yf.Ticker("^NDX")
+
+            # 只获取当天的数据（1 分钟间隔）
+            data = ticker.history(period="1d", interval="1m")
+
+            if data is not None and not data.empty:
+                latest = data.iloc[-1]
+
+                result = {
+                    "last_price": float(latest["Close"]),
+                    "intraday_high": float(data["High"].max()),
+                    "timestamp": latest.name
+                }
+                return result
+            else:
+                return {"last_price": None, "intraday_high": None, "timestamp": None}
+        except Exception as e:
+            print(f"Error getting NDX today: {e}")
+            return {"last_price": None, "intraday_high": None, "timestamp": None}
+
     def get_qqq_today(self) -> dict:
         """获取 QQQ 当日数据（只获取当日，避免限流）"""
         self._wait_for_rate_limit()

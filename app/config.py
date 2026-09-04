@@ -81,6 +81,31 @@ class Config:
             return self._db_config["exit_trend_stop_enabled"]
         return os.getenv("EXIT_TREND_STOP_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
+    # NDX 做多网格策略配置参数 (可优先从环境变量或字典读取，支持后续灵活扩展)
+    def get_rsi_threshold(self) -> float:
+        if self._db_config.get("rsi_threshold") is not None:
+            return float(self._db_config["rsi_threshold"])
+        return float(os.getenv("RSI_THRESHOLD", "35.0"))
+
+    def get_default_grid_upper_pct(self) -> float:
+        if self._db_config.get("default_grid_upper_pct") is not None:
+            return float(self._db_config["default_grid_upper_pct"])
+        return float(os.getenv("DEFAULT_GRID_UPPER_PCT", "0.20"))
+
+    def get_default_grid_lower_pct(self) -> float:
+        if self._db_config.get("default_grid_lower_pct") is not None:
+            return float(self._db_config["default_grid_lower_pct"])
+        return float(os.getenv("DEFAULT_GRID_LOWER_PCT", "0.20"))
+
+    def get_default_grid_count(self) -> int:
+        if self._db_config.get("default_grid_count") is not None:
+            return int(self._db_config["default_grid_count"])
+        return int(os.getenv("DEFAULT_GRID_COUNT", "200"))
+
+    def get_default_grid_leverage(self) -> float:
+        if self._db_config.get("default_grid_leverage") is not None:
+            return float(self._db_config["default_grid_leverage"])
+        return float(os.getenv("DEFAULT_GRID_LEVERAGE", "5.0"))
 
 def get_config(db_config: Optional[dict] = None) -> Config:
     return Config(db_config)

@@ -20,6 +20,18 @@ class WeChatNotifier:
         message = self._format_daily_report(report_data)
         return self._send_message(message)
 
+    def send_ndx_entry_alert(self, cycle, current_price: float) -> bool:
+        message = self._format_ndx_entry_alert(cycle, current_price)
+        return self._send_message(message)
+
+    def send_ndx_upper_alert(self, cycle, current_price: float) -> bool:
+        message = self._format_ndx_upper_alert(cycle, current_price)
+        return self._send_message(message)
+
+    def send_ndx_lower_alert(self, cycle, current_price: float) -> bool:
+        message = self._format_ndx_lower_alert(cycle, current_price)
+        return self._send_message(message)
+
     def _format_daily_report(self, data: Dict) -> str:
         date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
         qqq_price = data.get("qqq_price", 0.0)
@@ -175,6 +187,65 @@ QQQ 当前价: ${current_price:.2f}
 
 触发红线风控：请立即平仓以规避期权末期加速的时间价值衰减（Theta Decay）！"""
 
+    def _format_ndx_entry_alert(self, cycle, current_price: float) -> str:
+        base = getattr(cycle, "suggested_base_price", None) if not isinstance(cycle, dict) else cycle.get("suggested_base_price")
+        upper = getattr(cycle, "suggested_upper_price", None) if not isinstance(cycle, dict) else cycle.get("suggested_upper_price")
+        lower = getattr(cycle, "suggested_lower_price", None) if not isinstance(cycle, dict) else cycle.get("suggested_lower_price")
+        count = getattr(cycle, "suggested_grid_count", None) if not isinstance(cycle, dict) else cycle.get("suggested_grid_count")
+        leverage = getattr(cycle, "suggested_leverage", None) if not isinstance(cycle, dict) else cycle.get("suggested_leverage")
+
+        base_val = f"{base:.2f}" if base is not None else "N/A"
+        upper_val = f"{upper:.2f}" if upper is not None else "N/A"
+        lower_val = f"{lower:.2f}" if lower is not None else "N/A"
+        count_val = count if count is not None else 200
+        leverage_val = f"{int(leverage)}x" if leverage is not None else "5x"
+
+        return f"""NDX 开仓信号
+
+当前价格：{current_price:.2f}
+
+建议网格：
+下限：{lower_val}
+基准：{base_val}
+上限：{upper_val}
+
+网格数量：{count_val}
+杠杆：{leverage_val}
+
+状态：WAITING
+
+请手动在交易所创建网格后，再到后台确认实际参数。"""
+
+    def _format_ndx_upper_alert(self, cycle, current_price: float) -> str:
+        cycle_id = getattr(cycle, "id", None) if not isinstance(cycle, dict) else cycle.get("id")
+        actual_upper = getattr(cycle, "actual_upper_price", None) if not isinstance(cycle, dict) else cycle.get("actual_upper_price")
+        upper_val = f"{actual_upper:.2f}" if actual_upper is not None else "N/A"
+
+        return f"""NDX 网格上限触发
+
+当前价格：{current_price:.2f}
+实际上限：{upper_val}
+
+GridCycle ID：{cycle_id}
+
+状态：CLOSED
+原因：UPPER_REACHED"""
+
+    def _format_ndx_lower_alert(self, cycle, current_price: float) -> str:
+        cycle_id = getattr(cycle, "id", None) if not isinstance(cycle, dict) else cycle.get("id")
+        actual_lower = getattr(cycle, "actual_lower_price", None) if not isinstance(cycle, dict) else cycle.get("actual_lower_price")
+        lower_val = f"{actual_lower:.2f}" if actual_lower is not None else "N/A"
+
+        return f"""NDX 网格下限触发
+
+当前价格：{current_price:.2f}
+实际下限：{lower_val}
+
+GridCycle ID：{cycle_id}
+
+状态：STOPPED
+原因：LOWER_BREACHED"""
+
     def _send_message(self, message: str) -> bool:
         if not self.webhook_url:
             print(f"[WARN] WeChat webhook URL not configured, skipping alert: {message[:100]}")
@@ -209,7 +280,6 @@ QQQ 当前价: ${current_price:.2f}
                 return False
                 
         except Exception as e:
-            print(f"[ERROR] Failed to send WeChat message: {e}")
             return False
 
 

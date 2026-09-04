@@ -92,3 +92,36 @@ class DailyQQQData(Base):
     close_price = Column(Float, nullable=True)
 
     fetched_at = Column(DateTime, server_default=func.now())
+
+
+class GridCycle(Base):
+    __tablename__ = "grid_cycles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # 生命周期状态: 'WAITING', 'RUNNING', 'CLOSED', 'STOPPED'
+    status = Column(String(20), default="WAITING", nullable=False, index=True)
+
+    # --- 系统建议参数 (开仓信号触发时生成并保存) ---
+    suggested_base_price = Column(Float, nullable=False)
+    suggested_upper_price = Column(Float, nullable=False)
+    suggested_lower_price = Column(Float, nullable=False)
+    suggested_grid_count = Column(Integer, default=200, nullable=False)
+    suggested_leverage = Column(Float, default=5.0, nullable=False)
+
+    # --- 用户实际参数 (用户在交易所开仓后录入，RUNNING 启动时永久冻结) ---
+    actual_base_price = Column(Float, nullable=True)
+    actual_upper_price = Column(Float, nullable=True)
+    actual_lower_price = Column(Float, nullable=True)
+    actual_grid_count = Column(Integer, nullable=True)
+    actual_leverage = Column(Float, nullable=True)
+    actual_margin = Column(Float, nullable=True)
+
+    # --- 时间戳轨迹 ---
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    closed_at = Column(DateTime, nullable=True)
+
+    # --- 结束原因与备注 ---
+    close_reason = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
