@@ -26,6 +26,7 @@ from app.alerts.grid_cycle import (
 )
 from app.alerts.grid_math import calculate_theoretical_grid_position
 from app.alerts.ndx_rules import check_ndx_entry_conditions
+from app.alerts.grid_monitor import _is_data_fresh
 from app.database.models import GridCycle
 
 logger = logging.getLogger(__name__)
@@ -55,8 +56,22 @@ def _serialize_dt(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _grid_step(upper: Optional[float], lower: Optional[float], count: Optional[int]) -> Optional[float]:
+    """由 Phase 1 网格定义派生 grid step = (upper - lower) / count (仅展示用)"""
+    if upper is None or lower is None or not count or count <= 0:
+        return None
+    try:
+        return (float(upper) - float(lower)) / float(count)
+    except (TypeError, ValueError):
+        return None
+
+
 def serialize_cycle(cycle: GridCycle) -> Dict[str, Any]:
-    """将 GridCycle ORM 对象序列化为完整 JSON 结构 (suggested_* 与 actual_* 完全分离)"""
+    """将 GridCycle ORM 对象序列化为完整 JSON 结构 (suggested_* 与 actual_* 完全分离)
+
+    额外派生只读展示字段 suggested_grid_step / actual_grid_step,
+    用于 UI 显示; 不写库, 不参与状态机。
+    """
     return {
         "id": cycle.id,
         "status": cycle.status,
@@ -65,12 +80,18 @@ def serialize_cycle(cycle: GridCycle) -> Dict[str, Any]:
         "suggested_lower_price": cycle.suggested_lower_price,
         "suggested_grid_count": cycle.suggested_grid_count,
         "suggested_leverage": cycle.suggested_leverage,
+        "suggested_grid_step": _grid_step(
+            cycle.suggested_upper_price, cycle.suggested_lower_price, cycle.suggested_grid_count
+        ),
         "actual_base_price": cycle.actual_base_price,
         "actual_upper_price": cycle.actual_upper_price,
         "actual_lower_price": cycle.actual_lower_price,
         "actual_grid_count": cycle.actual_grid_count,
         "actual_leverage": cycle.actual_leverage,
         "actual_margin": cycle.actual_margin,
+        "actual_grid_step": _grid_step(
+            cycle.actual_upper_price, cycle.actual_lower_price, cycle.actual_grid_count
+        ),
         "created_at": _serialize_dt(cycle.created_at),
         "started_at": _serialize_dt(cycle.started_at),
         "closed_at": _serialize_dt(cycle.closed_at),
@@ -269,6 +290,8 @@ def get_grid_dashboard(
         "entry_signal": None,
         "is_data_valid": False,
         "data_timestamp": None,
+        "price_1y_ago": None,
+        "is_data_fresh": False,
     }
 
     if ndx_data and ndx_data.get("last_price"):
@@ -280,12 +303,18 @@ def get_grid_dashboard(
             "ma200": ndx_data.get("ma200"),
             "is_data_valid": is_valid,
             "data_timestamp": ndx_data.get("data_timestamp"),
+            "price_1y_ago": ndx_data.get("price_1y_ago"),
         })
         if is_valid:
             try:
                 ndx["entry_signal"] = check_ndx_entry_conditions(price, ndx_data)
             except Exception:
                 ndx["entry_signal"] = None
+        # 数据新鲜度判定复用 Phase 3 freshness (显示用途)
+        try:
+            ndx["is_data_fresh"] = bool(_is_data_fresh(ndx_data))
+        except Exception:
+            ndx["is_data_fresh"] = False
 
     theoretical: Optional[Dict[str, Any]] = None
     if (

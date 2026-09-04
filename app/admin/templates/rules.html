@@ -6,8 +6,8 @@
 <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
         <div>
-            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">策略规则 (长期复利引擎)</h1>
-            <p class="text-sm text-gray-500 mt-1">当前系统已锁定为严格的 QQQ LEAPS 长期复利引擎策略</p>
+            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">策略规则</h1>
+            <p class="text-sm text-gray-500 mt-1">NDX 网格策略参数与历史规则说明</p>
         </div>
         <div class="flex gap-3 w-full sm:w-auto">
             <a href="/admin"
@@ -18,6 +18,56 @@
     </div>
 
     <div class="space-y-6">
+        <!-- NDX Grid 策略参数 (只读, 数据来自后端配置) -->
+        <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2 bg-blue-50 rounded-lg">
+                    <span class="text-xl">📊</span>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-900">NDX Grid 策略参数</h2>
+                    <p class="text-sm text-gray-500">做多算术网格的开仓条件与默认建议参数</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4 pl-0 sm:pl-14">
+                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">RSI Threshold</h3>
+                    <p class="text-2xl font-bold text-gray-900">{{ "%.1f"|format(grid_rsi_threshold) }}</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Grid Upper</h3>
+                    <p class="text-2xl font-bold text-green-700">{{ "%.0f%%"|format(grid_upper_pct * 100) }}</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Grid Lower</h3>
+                    <p class="text-2xl font-bold text-red-700">-{{ "%.0f%%"|format(grid_lower_pct * 100) }}</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Grid Count</h3>
+                    <p class="text-2xl font-bold text-gray-900">{{ grid_count }}</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
+                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Leverage</h3>
+                    <p class="text-2xl font-bold text-gray-900">{{ "%.1fx"|format(grid_leverage) }}</p>
+                </div>
+            </div>
+
+            <div class="p-4 bg-blue-50 rounded-xl border border-blue-100 sm:ml-14">
+                <h3 class="font-medium text-blue-900 mb-1 text-sm">💡 NDX 开仓条件</h3>
+                <p class="text-sm text-blue-800">
+                    监控 <strong>NDX (^NDX)</strong> 日线: 当 <strong>RSI14 跌破 {{ "%.0f"|format(grid_rsi_threshold) }}</strong>,
+                    且 <strong>连续 3 个交易日收盘价大于 SMA200</strong>,
+                    且 <strong>当前价格高于一年前价格</strong> 时, 系统创建 WAITING 建议网格
+                    (Upper = Base +{{ "%.0f%%"|format(grid_upper_pct * 100) }},
+                    Lower = Base -{{ "%.0f%%"|format(grid_lower_pct * 100) }},
+                    共 {{ grid_count }} 格 / {{ grid_count + 1 }} 个价格节点)。
+                    用户在交易所手动开网格后录入实际参数, 实际杠杆可与建议值不同。
+                </p>
+                <p class="text-xs text-blue-600 mt-2">以上参数为只读展示, 当前来源于系统配置 (环境变量/默认值), 修改需更新系统配置。</p>
+            </div>
+        </div>
+
         <!-- QQQ 入场规则 -->
         <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
             <div class="flex items-center gap-3 mb-4">

@@ -19,6 +19,7 @@ from app.admin.auth import (
     authenticate_admin
 )
 from app.api.grid_api import router as grid_api_router
+from app.services import grid_service
 
 app = FastAPI(title="QQQ Option Alert System")
 
@@ -227,46 +228,50 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
     ).count()
 
     market_open = is_market_open_now()
-    
-    qqq_price = None
-    rsi = None
-    is_above_sma200 = None
-    
-    if data_fetcher:
-        try:
-            qqq_data = data_fetcher.get_qqq_data()
-            if qqq_data:
-                qqq_price = qqq_data.get("last_price")
-                rsi = qqq_data.get("rsi")
-                is_above_sma200 = qqq_data.get("is_above_sma200_3d")
-                
-        except Exception as e:
-            print(f"Market data fetch error: {e}")
+
+    # NDX Grid 数据: 复用 grid_service dashboard 聚合 (Phase 1-3 函数)
+    grid_dash = grid_service.get_grid_dashboard(db, data_fetcher.get_ndx_data() if data_fetcher else None)
+    ndx = grid_dash["ndx"]
+    latest_cycles = grid_service.get_cycle_history(db, 1)["cycles"]
+    latest_cycle = latest_cycles[0] if latest_cycles else None
 
     return templates.TemplateResponse(request=request, name="dashboard.html", context={
         "request": request,
         "positions_count": positions_count,
         "today_logs": today_logs,
         "market_open": market_open,
-        "qqq_price": qqq_price,
-        "rsi": rsi,
-        "is_above_sma200": is_above_sma200
+        "grid_dash": grid_dash,
+        "ndx": ndx,
+        "latest_cycle": latest_cycle,
+        # 兼容旧模板变量 (市场感知卡片)
+        "qqq_price": None,
+        "rsi": ndx.get("rsi"),
+        "is_above_sma200": None
+    })
+
+
+@app.get("/admin/grid", response_class=HTMLResponse)
+async def grid_page(request: Request, db: Session = Depends(get_db)):
+    if not verify_admin_cookie(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    grid_dash = grid_service.get_grid_dashboard(db, data_fetcher.get_ndx_data() if data_fetcher else None)
+    history = grid_service.get_cycle_history(db, 20)
+
+    return templates.TemplateResponse(request=request, name="grid.html", context={
+        "request": request,
+        "grid_dash": grid_dash,
+        "history": history
     })
 
 
 @app.get("/admin/positions", response_class=HTMLResponse)
-async def positions(request: Request, db: Session = Depends(get_db)):
+async def positions_redirect(request: Request):
     if not verify_admin_cookie(request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    positions = db.query(OptionPosition).order_by(OptionPosition.created_at.desc()).all()
-    today = get_current_time_et().date()
-
-    return templates.TemplateResponse(request=request, name="positions.html", context={
-        "request": request,
-        "positions": positions,
-        "today": today
-    })
+    # Phase 4B: 旧期权仓位页面退役, 兼容性重定向到 Grid 管理页
+    return RedirectResponse(url="/admin/grid", status_code=302)
 
 
 @app.post("/admin/positions")
@@ -383,49 +388,19 @@ async def rules(request: Request, db: Session = Depends(get_db)):
 
     config_db = db.query(Configuration).first()
 
+    # 优先使用运行时配置 (含 DB 覆盖值); 未启动时退回 env 默认
+    runtime_config = config if config is not None else get_config()
+
     return templates.TemplateResponse(request=request, name="rules.html", context={
         "request": request,
-        "config": config_db
+        "config": config_db,
+        # NDX Grid 策略参数: 以后端配置为唯一来源 (env/DB), 前端只展示
+        "grid_rsi_threshold": runtime_config.get_rsi_threshold(),
+        "grid_upper_pct": runtime_config.get_default_grid_upper_pct(),
+        "grid_lower_pct": runtime_config.get_default_grid_lower_pct(),
+        "grid_count": runtime_config.get_default_grid_count(),
+        "grid_leverage": runtime_config.get_default_grid_leverage(),
     })
-
-
-@app.post("/admin/rules")
-async def update_rules(
-    request: Request,
-    # New entry rules
-    entry_level1_enabled: bool = Form(False),
-    entry_level2_enabled: bool = Form(False),
-    entry_level3_enabled: bool = Form(False),
-    # New exit rules
-    exit_hard_tp_enabled: bool = Form(False),
-    exit_fast_tp_enabled: bool = Form(False),
-    exit_trailing_tp_enabled: bool = Form(False),
-    exit_tech_tp_enabled: bool = Form(False),
-    exit_dte_warning_enabled: bool = Form(False),
-    exit_dte_force_enabled: bool = Form(False),
-    exit_trend_stop_enabled: bool = Form(False),
-    db: Session = Depends(get_db)
-):
-    if not verify_admin_cookie(request):
-        return RedirectResponse(url="/admin/login", status_code=302)
-
-    config_db = db.query(Configuration).first()
-
-    config_db.entry_level1_enabled = entry_level1_enabled
-    config_db.entry_level2_enabled = entry_level2_enabled
-    config_db.entry_level3_enabled = entry_level3_enabled
-    
-    config_db.exit_hard_tp_enabled = exit_hard_tp_enabled
-    config_db.exit_fast_tp_enabled = exit_fast_tp_enabled
-    config_db.exit_trailing_tp_enabled = exit_trailing_tp_enabled
-    config_db.exit_tech_tp_enabled = exit_tech_tp_enabled
-    config_db.exit_dte_warning_enabled = exit_dte_warning_enabled
-    config_db.exit_dte_force_enabled = exit_dte_force_enabled
-    config_db.exit_trend_stop_enabled = exit_trend_stop_enabled
-
-    db.commit()
-
-    return RedirectResponse(url="/admin/rules", status_code=303)
 
 
 @app.get("/admin/logs", response_class=HTMLResponse)
