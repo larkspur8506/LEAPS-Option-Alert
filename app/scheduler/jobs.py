@@ -1,14 +1,21 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime
-import json
 import logging
 
 from .trading_hours import is_trading_time, get_current_time_et
 from app.market.data_fetcher import DataFetcher
 from app.alerts import dedup
+from app.alerts.alert_log import log_alert
 from app.alerts.grid_monitor import process_ndx_grid_cycle
-from app.notification.wechat import get_wechat_notifier
+from app.notification.wechat import (
+    get_wechat_notifier,
+    format_ndx_grid_data_stale,
+    format_ndx_grid_data_unavailable,
+)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,21 +55,10 @@ def cleanup_old_data(db, config):
 
 
 def _log_alert(db, alert: dict, success: bool):
-    from app.database.models import AlertLog
+    """兼容保留: 旧 dict 接口 -> 统一 AlertLog 写入层 (message=完整文本时走 log_alert)"""
+    from app.alerts.alert_log import log_alert_legacy_json
 
-    alert_log = AlertLog(
-        alert_type=alert.get("alert_type", "SYSTEM_ALERT"),
-        rule_name=alert.get("rule_name", ""),
-        message=json.dumps(alert, default=str),
-        sent_successfully=success,
-        position_id=alert.get("position_id")
-    )
-
-    if not success:
-        alert_log.error_message = "Failed to send WeChat notification"
-
-    db.add(alert_log)
-    db.commit()
+    log_alert_legacy_json(db, alert, success)
 
 
 def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_date: str):
@@ -82,6 +78,20 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
         ndx_data = None
 
     dashboard = grid_service.get_grid_dashboard(db, ndx_data)
+
+    # 日报涨跌幅: 注入 prev_close (辅助展示, 缺失时日报不显示涨跌幅)
+    if isinstance(ndx_data, dict) and isinstance(dashboard.get("ndx"), dict):
+        dashboard["ndx"]["prev_close"] = ndx_data.get("prev_close")
+
+    # 辅助市场指标 (S&P 500 / VIX): 缺失/失败不阻塞日报, 日报渲染 N/A
+    try:
+        breadth = data_fetcher.get_market_breadth()
+    except Exception as e:
+        logger.warning(f"DAILY_REPORT breadth data fetch failed: {e}")
+        breadth = None
+    if not isinstance(breadth, dict):
+        breadth = None
+
     latest_cycles = grid_service.get_cycle_history(db, 1)["cycles"]
     latest_cycle = latest_cycles[0] if latest_cycles else None
 
@@ -97,12 +107,19 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
             }
         except Exception as e:
             logger.warning(f"DAILY_REPORT strategy config fallback to defaults: {e}")
+    try:
+        strategy["rsi_threshold"] = (
+            config.get_rsi_threshold() if config and hasattr(config, "get_rsi_threshold") else 35.0
+        )
+    except Exception:
+        strategy["rsi_threshold"] = 35.0
 
     report_data = {
         "date": report_date,
         "dashboard": dashboard,
         "latest_cycle": latest_cycle,
         "strategy": strategy,
+        "breadth": breadth,
     }
 
     webhook = ""
@@ -166,6 +183,52 @@ def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):
             session.close()
 
 
+def _send_data_unavailable_alert(db, config):
+    """⚠️ 数据不可用事件: fail-closed 提醒 (按日去重, 不阻塞监控主流程)"""
+    try:
+        if not (config and hasattr(config, "get_wechat_webhook_url")):
+            return
+        webhook_url = config.get_wechat_webhook_url()
+        if not webhook_url:
+            return
+
+        # 按日去重: 同一天只提醒一次, 防止每 5 分钟重复推送
+        if not dedup.should_alert("NDX_GRID_DATA_UNAVAILABLE"):
+            return
+
+        notifier = get_wechat_notifier(webhook_url)
+        message = format_ndx_grid_data_unavailable()
+        try:
+            success = notifier.send_message(message)
+        except Exception as e:
+            logger.error(f"Failed to send data unavailable alert: {e}")
+            success = False
+        log_alert(db, "NDX_GRID_DATA_UNAVAILABLE", "NDX Data Unavailable", message, success)
+    except Exception as e:
+        logger.warning(f"data unavailable alert skipped: {e}")
+
+
+def _send_data_stale_alert(db, notifier, data_timestamp):
+    """⚠️ 数据过期事件: fail-closed 提醒 (按日去重, 不修改任何 Grid 状态)"""
+    try:
+        if notifier is None:
+            return
+
+        # 按日去重: 同一天只提醒一次
+        if not dedup.should_alert("NDX_GRID_DATA_STALE"):
+            return
+
+        message = format_ndx_grid_data_stale(data_timestamp)
+        try:
+            success = notifier.send_message(message)
+        except Exception as e:
+            logger.error(f"Failed to send data stale alert: {e}")
+            success = False
+        log_alert(db, "NDX_GRID_DATA_STALE", "NDX Data Stale", message, success)
+    except Exception as e:
+        logger.warning(f"data stale alert skipped: {e}")
+
+
 def check_ndx_grid_cycles(data_fetcher: DataFetcher, db=None, config=None, check_trading_hours: bool = True):
     """
     后台定时任务: NDX 合约网格监控与状态机驱动。
@@ -184,14 +247,17 @@ def check_ndx_grid_cycles(data_fetcher: DataFetcher, db=None, config=None, check
 
     try:
         # 1. 获取 NDX 市场数据
+        #    数据异常时 fail-closed: 跳过监控, 不触发任何信号, 仅发送数据异常提醒
         try:
             ndx_data = data_fetcher.get_ndx_data()
         except Exception as e:
             logger.error(f"Failed to fetch NDX data: {e}", exc_info=True)
+            _send_data_unavailable_alert(session, config)
             return {"status": "SKIPPED", "reason": "DATA_FETCH_ERROR"}
 
         if not ndx_data or not ndx_data.get("last_price") or ndx_data.get("last_price", 0) <= 0:
             logger.warning("NDX market data unavailable or invalid, skipping cycle check.")
+            _send_data_unavailable_alert(session, config)
             return {"status": "SKIPPED", "reason": "NO_VALID_DATA"}
 
         # 2. 获取 notifier
@@ -203,6 +269,15 @@ def check_ndx_grid_cycles(data_fetcher: DataFetcher, db=None, config=None, check
 
         # 3. 驱动网格监控状态机
         result = process_ndx_grid_cycle(session, ndx_data, notifier=notifier, config=config)
+
+        # 4. 数据异常事件提醒 (fail-closed: 状态机已跳过监控, 此处仅发送中文提醒)
+        if isinstance(result, dict) and result.get("status") == "SKIPPED":
+            reason = result.get("reason")
+            if reason == "STALE_DATA":
+                _send_data_stale_alert(session, notifier, ndx_data.get("data_timestamp"))
+            elif reason in ("NO_VALID_DATA", "INVALID_PRICE", "NON_POSITIVE_PRICE"):
+                _send_data_unavailable_alert(session, config)
+
         return result
 
     except Exception as e:

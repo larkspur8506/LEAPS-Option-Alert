@@ -66,6 +66,38 @@ class DataFetcher:
 
         return {}
 
+    def get_market_breadth(self) -> Dict[str, Any]:
+        """
+        获取辅助市场宽度指标 (S&P 500 / VIX), 仅用于每日简报展示。
+
+        定位: 辅助指标。任何一项获取失败都不抛出异常、不阻塞 NDX Grid 主流程,
+        缺失项以 None 表示 (日报渲染为 N/A)。
+        """
+        result: Dict[str, Any] = {"sp500": None, "vix": None}
+
+        for key, symbol in (("sp500", "^GSPC"), ("vix", "^VIX")):
+            try:
+                df = yf.Ticker(symbol).history(period="5d")
+                if df is None or df.empty or "Close" not in df.columns:
+                    result[key] = None
+                    continue
+
+                close = df["Close"].dropna()
+                if len(close) == 0:
+                    result[key] = None
+                    continue
+
+                price = float(close.iloc[-1])
+                prev = float(close.iloc[-2]) if len(close) >= 2 else None
+                change = ((price - prev) / prev * 100.0) if prev else None
+
+                result[key] = {"price": price, "prev_close": prev, "change_pct": change}
+            except Exception as e:
+                logger.warning(f"[WARN] market breadth fetch failed for {symbol}: {e}")
+                result[key] = None
+
+        return result
+
     def _process_ndx_df(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         处理 ^NDX DataFrame 并计算相关指标。

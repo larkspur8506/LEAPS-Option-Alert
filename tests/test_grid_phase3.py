@@ -78,8 +78,9 @@ class TestGridPhase3(unittest.TestCase):
 
         # Mock DataFetcher
         self.mock_fetcher = MagicMock()
-        # Mock Notifier
+        # Mock Notifier (grid_monitor 统一走 format_*(模块级) + send_message + AlertLog)
         self.mock_notifier = MagicMock(spec=WeChatNotifier)
+        self.mock_notifier.send_message.return_value = True
         self.mock_notifier.send_ndx_entry_alert.return_value = True
         self.mock_notifier.send_ndx_upper_alert.return_value = True
         self.mock_notifier.send_ndx_lower_alert.return_value = True
@@ -317,7 +318,7 @@ class TestGridPhase3(unittest.TestCase):
                 check_trading_hours=False
             )
 
-        self.assertEqual(self.mock_notifier.send_ndx_upper_alert.call_count, 1)
+        self.assertEqual(self.mock_notifier.send_message.call_count, 1)
 
         # 第二次运行 (例如 5 分钟后，价格依然在高位 24300，但无开仓信号)
         ndx_data_run2 = dict(self.no_entry_ndx_data)
@@ -333,7 +334,7 @@ class TestGridPhase3(unittest.TestCase):
             )
 
         # 不再有 RUNNING 周期，因此不会再次发送 upper alert
-        self.assertEqual(self.mock_notifier.send_ndx_upper_alert.call_count, 1)
+        self.assertEqual(self.mock_notifier.send_message.call_count, 1)
         self.assertEqual(res2["status"], "NO_SIGNAL")
 
     # -------------------------------------------------------------
@@ -436,11 +437,12 @@ class TestGridPhase3(unittest.TestCase):
                 check_trading_hours=False
             )
 
-        self.mock_notifier.send_ndx_entry_alert.assert_called_once()
-        args, _ = self.mock_notifier.send_ndx_entry_alert.call_args
-        cycle_arg, price_arg = args
-        self.assertEqual(cycle_arg.status, "WAITING")
-        self.assertEqual(price_arg, 20000.0)
+        self.mock_notifier.send_message.assert_called_once()
+        args, _ = self.mock_notifier.send_message.call_args
+        message = args[0]
+        self.assertIn("NDX Grid 入场信号", message)
+        self.assertIn("20,000.00", message)
+        self.assertIn("RSI(14)：30.00", message)
 
     def test_11_upper_trigger_sends_wechat_notification(self):
         """11. Upper trigger 发送一次通知"""
@@ -472,11 +474,11 @@ class TestGridPhase3(unittest.TestCase):
                 check_trading_hours=False
             )
 
-        self.mock_notifier.send_ndx_upper_alert.assert_called_once()
-        args, _ = self.mock_notifier.send_ndx_upper_alert.call_args
-        cycle_arg, price_arg = args
-        self.assertEqual(cycle_arg.status, "CLOSED")
-        self.assertEqual(price_arg, 24100.0)
+        self.mock_notifier.send_message.assert_called_once()
+        args, _ = self.mock_notifier.send_message.call_args
+        message = args[0]
+        self.assertIn("已触及上限", message)
+        self.assertIn("CLOSED", message)
 
     def test_12_lower_trigger_sends_wechat_notification(self):
         """12. Lower trigger 发送一次通知"""
@@ -508,11 +510,11 @@ class TestGridPhase3(unittest.TestCase):
                 check_trading_hours=False
             )
 
-        self.mock_notifier.send_ndx_lower_alert.assert_called_once()
-        args, _ = self.mock_notifier.send_ndx_lower_alert.call_args
-        cycle_arg, price_arg = args
-        self.assertEqual(cycle_arg.status, "STOPPED")
-        self.assertEqual(price_arg, 15900.0)
+        self.mock_notifier.send_message.assert_called_once()
+        args, _ = self.mock_notifier.send_message.call_args
+        message = args[0]
+        self.assertIn("已触及下限", message)
+        self.assertIn("STOPPED", message)
 
     def test_13_wechat_failure_does_not_rollback_state_change(self):
         """13. WeChat 发送失败不能导致 GridCycle 状态回滚"""
@@ -536,7 +538,7 @@ class TestGridPhase3(unittest.TestCase):
 
         # 模拟微信抛出异常或网络超时
         faulty_notifier = MagicMock()
-        faulty_notifier.send_ndx_upper_alert.side_effect = ConnectionError("WeChat network error")
+        faulty_notifier.send_message.side_effect = ConnectionError("WeChat network error")
 
         self.mock_fetcher.get_ndx_data.return_value = {"is_data_valid": True, "last_price": 24500.0, "data_timestamp": str(self.fresh_ts)}
 
@@ -560,32 +562,41 @@ class TestGridPhase3(unittest.TestCase):
     # -------------------------------------------------------------
     def test_14_data_failure_safe_skip(self):
         """14. NDX 数据获取失败 -> 本次任务安全退出，不创建周期，不修改已有周期"""
+        from app.alerts.dedup import clear_dedup
+
         # Case A: 抛出异常
         self.mock_fetcher.get_ndx_data.side_effect = Exception("yfinance service timeout")
 
-        res_err = check_ndx_grid_cycles(
-            self.mock_fetcher,
-            db=self.db,
-            config=self.mock_config,
-            check_trading_hours=False
-        )
+        with patch("app.scheduler.jobs.get_wechat_notifier", return_value=self.mock_notifier):
+            res_err = check_ndx_grid_cycles(
+                self.mock_fetcher,
+                db=self.db,
+                config=self.mock_config,
+                check_trading_hours=False
+            )
         self.assertEqual(res_err["status"], "SKIPPED")
         self.assertEqual(res_err["reason"], "DATA_FETCH_ERROR")
         self.assertEqual(self.db.query(GridCycle).count(), 0)
+        # 数据不可用提醒恰好发送一次 (按日去重)
+        self.assertEqual(self.mock_notifier.send_message.call_count, 1)
 
-        # Case B: 返回空数据字典
+        # Case B: 返回空数据字典 (同一天已提醒过 -> dedup, 不重复推送)
+        clear_dedup()
+        self.mock_notifier.send_message.reset_mock()
         self.mock_fetcher.get_ndx_data.side_effect = None
         self.mock_fetcher.get_ndx_data.return_value = {}
 
-        res_empty = check_ndx_grid_cycles(
-            self.mock_fetcher,
-            db=self.db,
-            config=self.mock_config,
-            check_trading_hours=False
-        )
+        with patch("app.scheduler.jobs.get_wechat_notifier", return_value=self.mock_notifier):
+            res_empty = check_ndx_grid_cycles(
+                self.mock_fetcher,
+                db=self.db,
+                config=self.mock_config,
+                check_trading_hours=False
+            )
         self.assertEqual(res_empty["status"], "SKIPPED")
         self.assertEqual(res_empty["reason"], "NO_VALID_DATA")
         self.assertEqual(self.db.query(GridCycle).count(), 0)
+        self.assertEqual(self.mock_notifier.send_message.call_count, 1)
 
         # Case C: 存在 RUNNING 周期时数据获取失败，RUNNING 周期不被意外修改
         suggested = {
@@ -607,12 +618,13 @@ class TestGridPhase3(unittest.TestCase):
         )
 
         self.mock_fetcher.get_ndx_data.side_effect = Exception("network unavailable")
-        check_ndx_grid_cycles(
-            self.mock_fetcher,
-            db=self.db,
-            config=self.mock_config,
-            check_trading_hours=False
-        )
+        with patch("app.scheduler.jobs.get_wechat_notifier", return_value=self.mock_notifier):
+            check_ndx_grid_cycles(
+                self.mock_fetcher,
+                db=self.db,
+                config=self.mock_config,
+                check_trading_hours=False
+            )
 
         self.db.refresh(cycle)
         self.assertEqual(cycle.status, "RUNNING")
@@ -726,7 +738,6 @@ class TestDataFreshness(unittest.TestCase):
         self.assertEqual(res["status"], "SKIPPED")
         self.assertEqual(res["reason"], "STALE_DATA")
         self.assertEqual(self.db.query(GridCycle).count(), 0)
-        self.mock_notifier.send_ndx_entry_alert.assert_not_called()
 
     def test_17_stale_data_missing_timestamp_treated_as_stale(self):
         """17. 缺失/非法 data_timestamp -> 视为陈旧，安全跳过"""
@@ -793,7 +804,7 @@ class TestDataFreshness(unittest.TestCase):
         self.db.refresh(cycle)
         self.assertEqual(cycle.status, "RUNNING")
         self.assertIsNone(cycle.closed_at)
-        self.mock_notifier.send_ndx_upper_alert.assert_not_called()
+        self.mock_notifier.send_message.assert_not_called()
 
     def test_20_stale_data_does_not_trigger_lower(self):
         """20. 陈旧数据 + RUNNING 且价格低于 lower -> 不得 STOPPED / LOWER_BREACHED"""
@@ -818,7 +829,7 @@ class TestDataFreshness(unittest.TestCase):
         self.db.refresh(cycle)
         self.assertEqual(cycle.status, "RUNNING")
         self.assertIsNone(cycle.closed_at)
-        self.mock_notifier.send_ndx_lower_alert.assert_not_called()
+        self.mock_notifier.send_message.assert_not_called()
 
     # -------------------------------------------------------------
     # Weekend / Holiday Handling

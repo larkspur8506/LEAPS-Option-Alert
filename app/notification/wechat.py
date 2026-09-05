@@ -1,7 +1,26 @@
+"""企业微信通知统一格式化与发送层 (NDX Grid)。
+
+设计原则:
+- 日报负责"今天市场怎么样"; 事件通知负责"刚刚发生了什么、我是否需要处理"。
+- 全部消息为中文、结构化、带 emoji; 市场状态文字由明确规则生成, 不含主观投资建议。
+- 本系统不连接交易所, 不自动下单/平仓/重建 Grid, 所有文案如实声明。
+- formatter 为模块级纯函数; WeChatNotifier 方法保留为向后兼容的薄封装。
+"""
 import re
 import requests
-from typing import Dict
+from typing import Dict, Optional, Any
 from datetime import datetime
+from pytz import timezone
+
+et_tz = timezone("America/New_York")
+
+SEPARATOR = "━━━━━━━━━━━━━━"
+
+DEFAULT_RSI_THRESHOLD = 35.0
+DEFAULT_UPPER_PCT = 0.20
+DEFAULT_LOWER_PCT = 0.20
+DEFAULT_GRID_COUNT = 200
+DEFAULT_LEVERAGE = 5.0
 
 
 def _redact_secrets(text: str) -> str:
@@ -11,192 +30,585 @@ def _redact_secrets(text: str) -> str:
     return re.sub(r"(key=)[^&\s'\"]+", r"\1***", text, flags=re.IGNORECASE)
 
 
+# ---------------------------------------------------------------------------
+# 通用格式化 helper (全部带类型防御, 数据缺失渲染 N/A, 不误报)
+# ---------------------------------------------------------------------------
+
+def _is_num(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _fmt_price(value: Any) -> str:
+    return f"{value:,.2f}" if _is_num(value) else "N/A"
+
+
+def _fmt_num(value: Any, digits: int = 2) -> str:
+    return f"{value:.{digits}f}" if _is_num(value) else "N/A"
+
+
+def _fmt_pct(value: Any, digits: int = 2) -> str:
+    return f"{value:+.{digits}f}%" if _is_num(value) else "N/A"
+
+
+def _fmt_leverage(value: Any) -> str:
+    return f"{value:.1f}x" if _is_num(value) else "N/A"
+
+
+def _fmt_grid_count(value: Any) -> str:
+    return f"{int(value)}格" if _is_num(value) else "N/A"
+
+
+def _change_pct(prev_close: Any, current: Any) -> Optional[float]:
+    if _is_num(prev_close) and _is_num(current) and prev_close != 0:
+        return (current - prev_close) / prev_close * 100.0
+    return None
+
+
+def _fmt_change(value: Optional[float], inverted: bool = False) -> str:
+    """渲染涨跌幅: 默认上涨🟢/下跌🔴; inverted=True 时反转 (VIX 下跌🟢)"""
+    if not _is_num(value):
+        return ""
+    up = value >= 0
+    if inverted:
+        up = not up
+    return f"  {'🟢' if up else '🔴'} {value:+.2f}%"
+
+
+def _fmt_date_cn(now: Optional[datetime] = None, with_time: bool = False) -> str:
+    if now is None:
+        now = datetime.now(et_tz)
+    if now.tzinfo is not None:
+        now = now.astimezone(et_tz)
+    if with_time:
+        return f"{now.year}年{now.month}月{now.day}日 {now.strftime('%H:%M')} ET"
+    return f"{now.year}年{now.month}月{now.day}日"
+
+
+def _grid_step(upper: Any, lower: Any, count: Any) -> Optional[float]:
+    if _is_num(upper) and _is_num(lower) and _is_num(count) and count > 0:
+        return (upper - lower) / count
+    return None
+
+
+def _market_section(current_price: Any, indicators: Dict[str, Any]) -> list:
+    """行情区块: 价格/涨跌幅/RSI/SMA200/距SMA200"""
+    indicators = indicators or {}
+    lines = ["📈 纳斯达克100"]
+    change = _change_pct(indicators.get("prev_close"), current_price)
+    lines.append(f"价格：{_fmt_price(current_price)}{_fmt_change(change)}")
+    lines.append(f"RSI(14)：{_fmt_num(indicators.get('rsi'))}")
+    sma = indicators.get("ma200", indicators.get("sma200"))
+    lines.append(f"SMA200：{_fmt_price(sma)}")
+    if _is_num(sma) and _is_num(current_price) and sma != 0:
+        lines.append(f"距SMA200：{_fmt_pct((current_price - sma) / sma * 100.0)}")
+    else:
+        lines.append("距SMA200：N/A")
+    return lines
+
+
+def _entry_section(rsi: Any, threshold: Any) -> list:
+    triggered = _is_num(rsi) and _is_num(threshold) and rsi < threshold
+    status_text = "🟢 已触发" if triggered else "⚪ 未触发"
+    return [
+        "🎯 入场条件",
+        f"RSI：{_fmt_num(rsi)}",
+        f"入场阈值：{_fmt_num(threshold)}",
+        f"状态：{status_text}",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 事件 formatter (Step 2 统一命名)
+# ---------------------------------------------------------------------------
+
+def format_ndx_grid_entry(
+    cycle: Any,
+    current_price: float,
+    indicators: Optional[Dict[str, Any]] = None,
+    rsi_threshold: Any = DEFAULT_RSI_THRESHOLD,
+    now: Optional[datetime] = None,
+) -> str:
+    """🟢 Grid Entry 入场信号 (Entry Signal 真正触发并创建 WAITING 后)"""
+    indicators = indicators or {}
+    if not _is_num(rsi_threshold):
+        rsi_threshold = DEFAULT_RSI_THRESHOLD
+
+    # 支持 GridCycle ORM (suggested_*) 与 grid_math 输出 dict (base_price 等)
+    if isinstance(cycle, dict) and "suggested_base_price" not in cycle:
+        base = cycle.get("base_price")
+        upper = cycle.get("upper_price")
+        lower = cycle.get("lower_price")
+        count = cycle.get("grid_count")
+        leverage = cycle.get("leverage")
+        step = cycle.get("grid_step")
+    else:
+        base = _get(cycle, "suggested_base_price")
+        upper = _get(cycle, "suggested_upper_price")
+        lower = _get(cycle, "suggested_lower_price")
+        count = _get(cycle, "suggested_grid_count")
+        leverage = _get(cycle, "suggested_leverage")
+        step = None
+    if step is None:
+        step = _grid_step(upper, lower, count)
+
+    lines = [
+        "🚨 NDX Grid 入场信号",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        "🟢 RSI 已进入入场区域",
+        "",
+    ]
+    lines += _market_section(current_price, indicators)
+    lines += [""]
+    lines += _entry_section(indicators.get("rsi"), rsi_threshold)
+    lines += [
+        "",
+        "📐 建议建立 Grid",
+        f"Base：{_fmt_price(base)}",
+        f"Upper：{_fmt_price(upper)}",
+        f"Lower：{_fmt_price(lower)}",
+        f"网格：{_fmt_grid_count(count)}",
+        f"每格：{_fmt_price(step)}",
+        f"杠杆：{_fmt_leverage(leverage)}",
+        "",
+        "💡 操作提示",
+        "当前已满足 Grid 入场条件。",
+        "请在交易所手动建立对应 Grid,",
+        "并在系统后台录入实际参数确认启动。",
+        "",
+        SEPARATOR,
+        "⚠️ 本系统仅提供信号及 Grid 参数提醒,",
+        "不连接交易所, 不自动交易。",
+    ]
+    return "\n".join(lines)
+
+
+def format_ndx_grid_proximity(
+    current_price: float,
+    rsi: Any,
+    threshold: Any = DEFAULT_RSI_THRESHOLD,
+    indicators: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """🟡 Grid 接近入场阈值 (RSI 处于 threshold ~ threshold+5 区间)"""
+    indicators = indicators or {}
+    if not _is_num(threshold):
+        threshold = DEFAULT_RSI_THRESHOLD
+    distance = (rsi - threshold) if (_is_num(rsi) and _is_num(threshold)) else None
+
+    lines = [
+        "🟡 NDX Grid 接近入场",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+    ]
+    lines += _market_section(current_price, indicators)
+    lines += [
+        "",
+        "🎯 入场信号",
+        "状态：🟡 接近触发",
+        f"入场阈值：{_fmt_num(threshold)}",
+        f"距离阈值：{_fmt_num(distance)}",
+        "",
+        f"💡 RSI 继续下降至 {_fmt_num(threshold)} 以下,",
+        "将触发 Grid 入场信号。",
+        "",
+        SEPARATOR,
+        "⚠️ 本系统仅提供行情及信号提醒,",
+        "不构成投资建议。",
+    ]
+    return "\n".join(lines)
+
+
+def _actual_grid_params(cycle: Any) -> list:
+    base = _get(cycle, "actual_base_price")
+    upper = _get(cycle, "actual_upper_price")
+    lower = _get(cycle, "actual_lower_price")
+    count = _get(cycle, "actual_grid_count")
+    leverage = _get(cycle, "actual_leverage")
+    return [
+        f"Base：{_fmt_price(base)}",
+        f"Upper：{_fmt_price(upper)}",
+        f"Lower：{_fmt_price(lower)}",
+        f"网格：{_fmt_grid_count(count)}",
+        f"杠杆：{_fmt_leverage(leverage)}",
+    ]
+
+
+def format_ndx_grid_stopped(
+    cycle: Any,
+    current_price: float,
+    indicators: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """🔴 Grid Lower / STOPPED (RUNNING -> STOPPED, 触及下限)"""
+    indicators = indicators or {}
+    reason = _get(cycle, "close_reason") or "LOWER_BREACHED"
+
+    lines = [
+        "🛑 NDX Grid 已触及下限",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        "⚠️ Grid 下限已触发",
+        "",
+    ]
+    lines += _market_section(current_price, indicators)
+    lines += [
+        "",
+        "📐 当前 Grid",
+    ]
+    lines += _actual_grid_params(cycle)
+    lines += [
+        "",
+        "🔴 Grid 状态",
+        "状态：STOPPED",
+        f"触发原因：{reason}",
+        "",
+        "💡 操作提示",
+        "当前 Grid 已进入停止状态。",
+        "请检查交易所实际 Grid 状态,",
+        "系统不会自动重新建立 Grid。",
+        "",
+        SEPARATOR,
+        "⚠️ 本系统不连接交易所,",
+        "不会自动平仓或重新开仓。",
+    ]
+    return "\n".join(lines)
+
+
+def format_ndx_grid_closed(
+    cycle: Any,
+    current_price: float,
+    indicators: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """🟢 Grid Upper / CLOSED (RUNNING -> CLOSED, 触及上限)"""
+    indicators = indicators or {}
+    reason = _get(cycle, "close_reason") or "UPPER_REACHED"
+
+    lines = [
+        "🎉 NDX Grid 已触及上限",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        "🚀 Grid 上限已触发",
+        "",
+    ]
+    lines += _market_section(current_price, indicators)
+    lines += [
+        "",
+        "📐 当前 Grid",
+    ]
+    lines += _actual_grid_params(cycle)
+    lines += [
+        "",
+        "🟢 Grid 状态",
+        "状态：CLOSED",
+        f"触发原因：{reason}",
+        "",
+        "💡 操作提示",
+        "当前 Grid 已完成本轮运行。",
+        "新的 Grid 不会自动建立,",
+        "需等待下一次入场信号。",
+        "",
+        SEPARATOR,
+        "⚠️ 本系统不连接交易所,",
+        "不会自动交易。",
+    ]
+    return "\n".join(lines)
+
+
+def format_ndx_grid_manual_close(
+    cycle: Any,
+    current_price: Any = None,
+    indicators: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """🔄 Grid 手动关闭 (MANUAL_CLOSE, 记录性质通知)"""
+    indicators = indicators or {}
+
+    lines = [
+        "🔄 NDX Grid 状态更新",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        "📐 Grid",
+        "状态：🔵 已手动关闭",
+        "",
+    ]
+    lines += _actual_grid_params(cycle)
+    change = _change_pct(indicators.get("prev_close"), current_price)
+    lines += [
+        "",
+        "📈 NDX 当前价格",
+        f"{_fmt_price(current_price)}{_fmt_change(change)}",
+        "",
+        "💡 本轮 Grid 已结束。",
+        "系统将等待下一次入场信号。",
+        "",
+        SEPARATOR,
+    ]
+    return "\n".join(lines)
+
+
+def format_ndx_grid_data_stale(
+    data_timestamp: Any = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """⚠️ 数据过期 (fail-closed: 监控跳过, 不触发任何信号)"""
+    ts_text = str(data_timestamp) if data_timestamp else "N/A"
+    return "\n".join([
+        "⚠️ NDX 行情数据过期",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        "NDX 行情数据未能在允许时间内更新。",
+        "",
+        "数据状态：🔴 STALE",
+        f"最后有效数据：{ts_text}",
+        "",
+        "💡 本次 Grid 监控已跳过,",
+        "系统不会基于过期行情触发新的信号。",
+        "",
+        "请检查行情数据源。",
+        "",
+        SEPARATOR,
+    ])
+
+
+def format_ndx_grid_data_unavailable(now: Optional[datetime] = None) -> str:
+    """⚠️ 数据不可用 (fail-closed: 监控跳过, 不执行信号判断)"""
+    return "\n".join([
+        "⚠️ NDX 行情数据不可用",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        "当前无法获取有效 NDX 行情数据。",
+        "",
+        "数据状态：🔴 UNAVAILABLE",
+        "",
+        "💡 本次 Grid 监控已跳过。",
+        "系统不会在数据异常时执行信号判断。",
+        "",
+        "请检查行情数据源。",
+        "",
+        SEPARATOR,
+    ])
+
+
+# ---------------------------------------------------------------------------
+# 每日市场简报 (正式确认模板)
+# ---------------------------------------------------------------------------
+
+_DATA_STATE_TEXT = {
+    ("FRESH",): "🟢 正常",
+}
+_SIGNAL_STATE_TEXT = {True: "🟢 已触发", False: "⚪ 未触发", None: "❓ 未评估"}
+_CYCLE_STATUS_TEXT = {"CLOSED": "🟢 CLOSED", "STOPPED": "🔴 STOPPED"}
+
+
+def format_ndx_grid_daily_report(data: Dict, now: Optional[datetime] = None) -> str:
+    """📊 每日 NDX 市场简报。
+
+    纯展示层: 只格式化 dashboard 数据, 不计算任何网格/信号逻辑。
+    数据缺失/异常时渲染 N/A / 未评估, 不误报。
+    """
+    ndx = data.get("dashboard", {}).get("ndx") or {}
+    running = data.get("dashboard", {}).get("running_cycle")
+    waiting = data.get("dashboard", {}).get("waiting_cycle")
+    theo = data.get("dashboard", {}).get("theoretical_grid_position")
+    latest = data.get("latest_cycle") or {}
+    strategy = data.get("strategy", {})
+    breadth = data.get("breadth") if isinstance(data.get("breadth"), dict) else None
+
+    price = ndx.get("last_price")
+    rsi = ndx.get("rsi")
+    sma = ndx.get("ma200")
+    price_1y_ago = ndx.get("price_1y_ago")
+    rsi_threshold = strategy.get("rsi_threshold")
+    if not _is_num(rsi_threshold):
+        rsi_threshold = DEFAULT_RSI_THRESHOLD
+    upper_pct = strategy.get("upper_pct", DEFAULT_UPPER_PCT)
+    lower_pct = strategy.get("lower_pct", DEFAULT_LOWER_PCT)
+    grid_count = strategy.get("grid_count", DEFAULT_GRID_COUNT)
+    leverage = strategy.get("leverage", DEFAULT_LEVERAGE)
+
+    # 数据状态 (明确规则, 无主观判断)
+    data_valid = bool(ndx.get("is_data_valid"))
+    data_fresh = bool(ndx.get("is_data_fresh"))
+    if data_valid and data_fresh:
+        data_state = "🟢 正常"
+    elif data_valid:
+        data_state = "🟡 过期"
+    else:
+        data_state = "🔴 不可用"
+
+    # 日报涨跌幅 (prev_close 由 scheduler 注入, 缺失则不显示)
+    change = _change_pct(ndx.get("prev_close"), price)
+
+    lines = [
+        "📊 NDX 每日市场简报",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now)}",
+        "",
+        "📈 纳斯达克100",
+        f"价格：{_fmt_price(price)}{_fmt_change(change)}",
+        f"RSI(14)：{_fmt_num(rsi)}",
+        f"SMA200：{_fmt_price(sma)}",
+    ]
+    if _is_num(sma) and _is_num(price) and sma != 0:
+        lines.append(f"距SMA200：{_fmt_pct((price - sma) / sma * 100.0)}")
+    else:
+        lines.append("距SMA200：N/A")
+    if _is_num(price) and _is_num(price_1y_ago) and price_1y_ago != 0:
+        lines.append(f"过去1年：{_fmt_pct((price - price_1y_ago) / price_1y_ago * 100.0)}")
+    else:
+        lines.append("过去1年：N/A")
+    lines.append(f"数据状态：{data_state}")
+
+    # 辅助指标: S&P 500 / VIX (缺失显示 N/A, 不影响主数据)
+    sp = (breadth or {}).get("sp500") or {}
+    vix = (breadth or {}).get("vix") or {}
+    sp_price = sp.get("price") if isinstance(sp, dict) else None
+    vix_price = vix.get("price") if isinstance(vix, dict) else None
+    lines += [
+        "",
+        "🇺🇸 美股大盘",
+        f"标普500：{_fmt_price(sp_price)}{_fmt_change(sp.get('change_pct') if isinstance(sp, dict) else None)}",
+        f"VIX：{_fmt_num(vix_price)}{_fmt_change(vix.get('change_pct') if isinstance(vix, dict) else None, inverted=True)}",
+    ]
+
+    # 入场信号 (规则判定结果, 不做主观解读)
+    signal = ndx.get("entry_signal")
+    signal_text = _SIGNAL_STATE_TEXT.get(signal, "❓ 未评估")
+    if _is_num(rsi) and _is_num(rsi_threshold):
+        distance = rsi - rsi_threshold
+        distance_text = f"{distance:.2f}" if distance > 0 else "0.00"
+    else:
+        distance_text = "N/A"
+    lines += [
+        "",
+        "🎯 Grid 入场信号",
+        f"状态：{signal_text}",
+        f"RSI(14)：{_fmt_num(rsi)}",
+        f"入场阈值：{_fmt_num(rsi_threshold)}",
+        f"距离阈值：{distance_text}",
+    ]
+
+    # Grid 状态 (只有需要用户操作/状态变化时才展开完整参数)
+    lines += ["", "📐 Grid 状态"]
+    if running:
+        lines.append("当前：🟢 RUNNING")
+        if theo and isinstance(theo, dict) and theo.get("grid_interval_index") is not None:
+            lines.append(
+                f"理论位置：第 {theo.get('grid_interval_index')} / {_fmt_grid_count(theo.get('grid_count'))}"
+            )
+        if running.get("started_at"):
+            lines.append(f"启动时间：{running.get('started_at')}")
+    elif waiting:
+        lines.append("当前：🟡 WAITING — 等待确认启动")
+        lines += [
+            f"Base：{_fmt_price(_get(waiting, 'suggested_base_price'))}",
+            f"Upper：{_fmt_price(_get(waiting, 'suggested_upper_price'))}",
+            f"Lower：{_fmt_price(_get(waiting, 'suggested_lower_price'))}",
+            f"网格：{_fmt_grid_count(_get(waiting, 'suggested_grid_count'))}",
+            f"杠杆：{_fmt_leverage(_get(waiting, 'suggested_leverage'))}",
+        ]
+    else:
+        lines.append("当前：⚪ 无运行中的 Grid")
+        if latest and latest.get("status"):
+            status_text = _CYCLE_STATUS_TEXT.get(latest.get("status"), latest.get("status"))
+            if latest.get("close_reason"):
+                status_text += f"（{latest.get('close_reason')}）"
+            lines.append(f"最近一轮：{status_text}")
+        if _is_num(upper_pct) and _is_num(lower_pct) and upper_pct == lower_pct:
+            range_text = f"±{upper_pct * 100:.0f}%"
+        else:
+            range_text = f"+{_fmt_num(upper_pct * 100, 0)}% / -{_fmt_num(lower_pct * 100, 0)}%"
+        lines += [
+            f"默认区间：{range_text}",
+            f"网格：{_fmt_grid_count(grid_count)}",
+            f"杠杆：{_fmt_leverage(leverage)}",
+        ]
+
+    # 市场状态: 纯事实规则生成, 不含建议/预测
+    market_lines = []
+    if _is_num(sma) and _is_num(price) and sma != 0:
+        pos_pct = (price - sma) / sma * 100.0
+        market_lines.append(
+            f"NDX 当前位于 SMA200 {'上方' if pos_pct >= 0 else '下方'} {abs(pos_pct):.2f}%"
+        )
+    if _is_num(price) and _is_num(price_1y_ago) and price_1y_ago != 0:
+        y_pct = (price - price_1y_ago) / price_1y_ago * 100.0
+        market_lines.append(f"过去一年{'上涨' if y_pct >= 0 else '下跌'} {abs(y_pct):.2f}%")
+    if _is_num(rsi) and _is_num(rsi_threshold):
+        if rsi <= rsi_threshold:
+            market_lines.append("RSI 已进入入场区域")
+        else:
+            market_lines.append(
+                f"RSI 尚未进入入场区域, 距离入场阈值还有 {rsi - rsi_threshold:.2f}"
+            )
+    if market_lines:
+        lines += ["", "💡 市场状态"] + market_lines
+
+    lines += [
+        "",
+        SEPARATOR,
+        "⚠️ 本系统仅提供行情、信号及 Grid 状态提醒,",
+        "不连接交易所, 不自动交易。",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# WeChatNotifier (发送层)
+# ---------------------------------------------------------------------------
+
 class WeChatNotifier:
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
 
+    def send_message(self, message: str) -> bool:
+        """发送已格式化的完整消息文本 (AlertLog 应保存同一 message)"""
+        return self._send_message(message)
+
+    # ---- 向后兼容的便捷封装 (内部委托统一 formatter) ----
+
     def send_ndx_grid_report(self, report_data: Dict) -> bool:
-        message = self.format_ndx_grid_report(report_data)
-        return self._send_message(message)
+        return self.send_message(format_ndx_grid_daily_report(report_data))
 
-    def send_ndx_entry_alert(self, cycle, current_price: float) -> bool:
-        message = self._format_ndx_entry_alert(cycle, current_price)
-        return self._send_message(message)
+    def send_ndx_entry_alert(self, cycle, current_price: float, indicators: Optional[Dict] = None,
+                             rsi_threshold: Any = DEFAULT_RSI_THRESHOLD) -> bool:
+        return self.send_message(format_ndx_grid_entry(cycle, current_price, indicators=indicators,
+                                                       rsi_threshold=rsi_threshold))
 
-    def send_ndx_upper_alert(self, cycle, current_price: float) -> bool:
-        message = self._format_ndx_upper_alert(cycle, current_price)
-        return self._send_message(message)
+    def send_ndx_upper_alert(self, cycle, current_price: float, indicators: Optional[Dict] = None) -> bool:
+        return self.send_message(format_ndx_grid_closed(cycle, current_price, indicators=indicators))
 
-    def send_ndx_lower_alert(self, cycle, current_price: float) -> bool:
-        message = self._format_ndx_lower_alert(cycle, current_price)
-        return self._send_message(message)
+    def send_ndx_lower_alert(self, cycle, current_price: float, indicators: Optional[Dict] = None) -> bool:
+        return self.send_message(format_ndx_grid_stopped(cycle, current_price, indicators=indicators))
 
-    def _format_ndx_entry_alert(self, cycle, current_price: float) -> str:
-        base = getattr(cycle, "suggested_base_price", None) if not isinstance(cycle, dict) else cycle.get("suggested_base_price")
-        upper = getattr(cycle, "suggested_upper_price", None) if not isinstance(cycle, dict) else cycle.get("suggested_upper_price")
-        lower = getattr(cycle, "suggested_lower_price", None) if not isinstance(cycle, dict) else cycle.get("suggested_lower_price")
-        count = getattr(cycle, "suggested_grid_count", None) if not isinstance(cycle, dict) else cycle.get("suggested_grid_count")
-        leverage = getattr(cycle, "suggested_leverage", None) if not isinstance(cycle, dict) else cycle.get("suggested_leverage")
-
-        base_val = f"{base:.2f}" if base is not None else "N/A"
-        upper_val = f"{upper:.2f}" if upper is not None else "N/A"
-        lower_val = f"{lower:.2f}" if lower is not None else "N/A"
-        count_val = count if count is not None else 200
-        leverage_val = f"{int(leverage)}x" if leverage is not None else "5x"
-
-        return f"""NDX 开仓信号
-
-当前价格：{current_price:.2f}
-
-建议网格：
-下限：{lower_val}
-基准：{base_val}
-上限：{upper_val}
-
-网格数量：{count_val}
-杠杆：{leverage_val}
-
-状态：WAITING
-
-请手动在交易所创建网格后，再到后台确认实际参数。"""
-
-    def _format_ndx_upper_alert(self, cycle, current_price: float) -> str:
-        cycle_id = getattr(cycle, "id", None) if not isinstance(cycle, dict) else cycle.get("id")
-        actual_upper = getattr(cycle, "actual_upper_price", None) if not isinstance(cycle, dict) else cycle.get("actual_upper_price")
-        upper_val = f"{actual_upper:.2f}" if actual_upper is not None else "N/A"
-
-        return f"""NDX 网格上限触发
-
-当前价格：{current_price:.2f}
-实际上限：{upper_val}
-
-GridCycle ID：{cycle_id}
-
-状态：CLOSED
-原因：UPPER_REACHED"""
-
-    def _format_ndx_lower_alert(self, cycle, current_price: float) -> str:
-        cycle_id = getattr(cycle, "id", None) if not isinstance(cycle, dict) else cycle.get("id")
-        actual_lower = getattr(cycle, "actual_lower_price", None) if not isinstance(cycle, dict) else cycle.get("actual_lower_price")
-        lower_val = f"{actual_lower:.2f}" if actual_lower is not None else "N/A"
-
-        return f"""NDX 网格下限触发
-
-当前价格：{current_price:.2f}
-实际下限：{lower_val}
-
-GridCycle ID：{cycle_id}
-
-状态：STOPPED
-原因：LOWER_BREACHED"""
+    # ---- formatter 薄封装 (保持实例方法可用) ----
 
     def format_ndx_grid_report(self, data: Dict) -> str:
-        """
-        NDX Grid Daily Report (Phase 6)。
-        纯展示层: 只格式化 dashboard 数据, 不计算任何网格/信号逻辑。
-        数据缺失/异常时渲染 N/A / NOT EVALUATED, 不误报。
-        """
-        ndx = data.get("dashboard", {}).get("ndx") or {}
-        running = data.get("dashboard", {}).get("running_cycle")
-        waiting = data.get("dashboard", {}).get("waiting_cycle")
-        theo = data.get("dashboard", {}).get("theoretical_grid_position")
-        latest = data.get("latest_cycle") or {}
-        strategy = data.get("strategy", {})
+        return format_ndx_grid_daily_report(data)
 
-        def price(v):
-            return f"{v:,.2f}" if isinstance(v, (int, float)) else "N/A"
+    def format_ndx_entry_alert(self, cycle, current_price: float, **kwargs) -> str:
+        return format_ndx_grid_entry(cycle, current_price, **kwargs)
 
-        # NDX Market (数据异常时不显示误导性数据)
-        data_valid = bool(ndx.get("is_data_valid"))
-        data_fresh = bool(ndx.get("is_data_fresh"))
-        data_state = "FRESH" if (data_valid and data_fresh) else ("STALE" if data_valid else "UNAVAILABLE")
-        signal = ndx.get("entry_signal")
-        signal_text = {True: "YES", False: "NO"}.get(signal, "NOT EVALUATED")
+    def format_ndx_upper_alert(self, cycle, current_price: float, **kwargs) -> str:
+        return format_ndx_grid_closed(cycle, current_price, **kwargs)
 
-        lines = [
-            "NDX Grid Daily Report",
-            data.get("date", ""),
-            "",
-            "NDX Market",
-            f"Price: {price(ndx.get('last_price'))}",
-            f"RSI14: {ndx.get('rsi'):.2f}" if isinstance(ndx.get("rsi"), (int, float)) else "RSI14: N/A",
-            f"SMA200: {price(ndx.get('ma200'))}",
-            f"1Y Ago: {price(ndx.get('price_1y_ago'))}",
-            f"Data: {data_state}",
-            "",
-            "Entry Signal",
-            signal_text,
-            "",
-            "Grid Strategy",
-            f"Upper: +{strategy.get('upper_pct', 0.20) * 100:.0f}%",
-            f"Lower: -{strategy.get('lower_pct', 0.20) * 100:.0f}%",
-            f"Grid Count: {strategy.get('grid_count', 200)}",
-            f"Leverage: {strategy.get('leverage', 5.0):.1f}x",
-            f"Grid Step: N/A",
-        ]
-
-        # Grid Status (以 API status 为准, 无活动时用最近一条历史)
-        if running:
-            lines += [
-                "",
-                "Grid Status",
-                "RUNNING",
-                "",
-                f"Base: {price(running.get('actual_base_price'))}",
-                f"Upper: {price(running.get('actual_upper_price'))}",
-                f"Lower: {price(running.get('actual_lower_price'))}",
-                f"Grid Count: {running.get('actual_grid_count') if running.get('actual_grid_count') is not None else 'N/A'}",
-                f"Leverage: {running.get('actual_leverage'):.1f}x" if isinstance(running.get("actual_leverage"), (int, float)) else "Leverage: N/A",
-                f"Margin: {price(running.get('actual_margin'))}",
-                f"Started: {running.get('started_at') or 'N/A'}",
-            ]
-            if theo:
-                upper = running.get("actual_upper_price")
-                lower = running.get("actual_lower_price")
-                cur = ndx.get("last_price")
-                lines += [
-                    "",
-                    "Theoretical Status",
-                    f"Interval: {theo.get('grid_interval_index') if theo.get('grid_interval_index') is not None else 'N/A'} / {theo.get('grid_count') if theo.get('grid_count') is not None else 'N/A'}",
-                    f"Position: {theo.get('position_ratio'):.2%}" if isinstance(theo.get("position_ratio"), (int, float)) else "Position: N/A",
-                    f"Distance to Upper: {(upper - cur) / upper:.2%}" if isinstance(upper, (int, float)) and isinstance(cur, (int, float)) and upper else "Distance to Upper: N/A",
-                    f"Distance to Lower: {(cur - lower) / lower:.2%}" if isinstance(lower, (int, float)) and isinstance(cur, (int, float)) and lower else "Distance to Lower: N/A",
-                ]
-            lines += [
-                "",
-                "⚠️ 理论状态仅用于提醒，不代表交易所实际持仓或实际盈亏。",
-            ]
-        elif waiting:
-            lines += [
-                "",
-                "Grid Status",
-                "WAITING — 等待用户确认并在交易所启动 Grid",
-                "",
-                f"Suggested Base: {price(waiting.get('suggested_base_price'))}",
-                f"Suggested Upper: {price(waiting.get('suggested_upper_price'))}",
-                f"Suggested Lower: {price(waiting.get('suggested_lower_price'))}",
-                f"Grid Count: {waiting.get('suggested_grid_count') if waiting.get('suggested_grid_count') is not None else 'N/A'}",
-                f"Leverage: {waiting.get('suggested_leverage'):.1f}x" if isinstance(waiting.get("suggested_leverage"), (int, float)) else "Leverage: N/A",
-                f"Grid Step: {price(waiting.get('suggested_grid_step'))}",
-                f"Created: {waiting.get('created_at') or 'N/A'}",
-            ]
-        elif latest:
-            # 无活动 Grid: 用最近历史显示 CLOSED/STOPPED 及原因
-            lines += [
-                "",
-                "Grid Status",
-                latest.get("status", "NO ACTIVE GRID"),
-            ]
-            if latest.get("close_reason"):
-                lines.append(f"Reason: {latest.get('close_reason')}")
-        else:
-            lines += [
-                "",
-                "Grid Status",
-                "NO ACTIVE GRID",
-            ]
-
-        return "\n".join(lines)
+    def format_ndx_lower_alert(self, cycle, current_price: float, **kwargs) -> str:
+        return format_ndx_grid_stopped(cycle, current_price, **kwargs)
 
     def _send_message(self, message: str) -> bool:
         if not self.webhook_url:

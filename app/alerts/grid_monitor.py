@@ -23,12 +23,68 @@ from app.alerts.grid_cycle import (
     stop_grid_cycle
 )
 from app.alerts.ndx_rules import check_ndx_entry_signals
-from app.notification.wechat import WeChatNotifier
+from app.alerts import dedup
+from app.alerts.alert_log import log_alert
+from app.notification.wechat import (
+    WeChatNotifier,
+    format_ndx_grid_entry,
+    format_ndx_grid_proximity,
+    format_ndx_grid_closed,
+    format_ndx_grid_stopped,
+)
 from app.scheduler.trading_hours import get_latest_trading_day
 
 logger = logging.getLogger(__name__)
 
 et_tz = timezone("America/New_York")
+
+# 接近入场阈值 (proximity) 规则: threshold < RSI <= threshold + PROXIMITY_DISTANCE
+PROXIMITY_DISTANCE = 5.0
+DEFAULT_RSI_THRESHOLD = 35.0
+
+
+def _resolve_rsi_threshold(config: Optional[Any]) -> float:
+    """从运行时配置读取 RSI 入场阈值; 缺失/非法时回退默认 35.0"""
+    try:
+        if config and hasattr(config, "get_rsi_threshold"):
+            value = config.get_rsi_threshold()
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                return float(value)
+    except Exception:
+        pass
+    return DEFAULT_RSI_THRESHOLD
+
+
+def _notify_with_log(db: Session, notifier: Optional[WeChatNotifier],
+                     message: str, alert_type: str, rule_name: str) -> bool:
+    """
+    发送已格式化的完整消息并写入 AlertLog (message 与实际发送内容完全一致)。
+    notifier 为 None (未配置 webhook) 时跳过, 与既有行为一致。
+    通知/日志失败均不影响已提交的状态变更。
+    """
+    if notifier is None:
+        return False
+
+    success = False
+    try:
+        success = bool(notifier.send_message(message))
+    except Exception as e:
+        logger.error(f"[NDX Monitor] Failed to send WeChat alert ({alert_type}): {e}")
+        success = False
+
+    try:
+        log_alert(
+            db,
+            alert_type=alert_type,
+            rule_name=rule_name,
+            message=message,
+            success=success,
+            error_message="Failed to send WeChat notification" if not success else None,
+        )
+    except Exception as e:
+        logger.warning(f"[NDX Monitor] Failed to write AlertLog ({alert_type}): {e}")
+
+    return success
 
 
 def _is_data_fresh(ndx_data: Dict[str, Any], now: Optional[datetime] = None) -> bool:
@@ -156,11 +212,16 @@ def process_ndx_grid_cycle(
             closed_cycle = close_grid_cycle(db, running_cycle.id, reason="UPPER_REACHED")
 
             # 发送微信通知 (异常隔离，不影响已持久化的状态)
+            # message = 实际发送内容, 同时完整写入 AlertLog
             if notifier:
                 try:
-                    notifier.send_ndx_upper_alert(closed_cycle, current_price)
+                    message = format_ndx_grid_closed(closed_cycle, current_price, indicators=ndx_data)
+                    _notify_with_log(db, notifier, message, "NDX_GRID_CLOSED", "NDX Grid Upper Reached")
                 except Exception as e:
                     logger.error(f"[NDX Monitor] Failed to send WeChat upper alert for cycle {closed_cycle.id}: {e}")
+
+            # cycle 结束: 允许下一个 cycle 重新触发 proximity 提醒
+            dedup.clear_proximity()
 
             return {"status": "CLOSED", "reason": "UPPER_REACHED", "cycle_id": closed_cycle.id}
 
@@ -176,9 +237,13 @@ def process_ndx_grid_cycle(
             # 发送微信通知 (异常隔离，不影响已持久化的状态)
             if notifier:
                 try:
-                    notifier.send_ndx_lower_alert(stopped_cycle, current_price)
+                    message = format_ndx_grid_stopped(stopped_cycle, current_price, indicators=ndx_data)
+                    _notify_with_log(db, notifier, message, "NDX_GRID_STOPPED", "NDX Grid Lower Breached")
                 except Exception as e:
                     logger.error(f"[NDX Monitor] Failed to send WeChat lower alert for cycle {stopped_cycle.id}: {e}")
+
+            # cycle 结束: 允许下一个 cycle 重新触发 proximity 提醒
+            dedup.clear_proximity()
 
             return {"status": "STOPPED", "reason": "LOWER_BREACHED", "cycle_id": stopped_cycle.id}
 
@@ -212,14 +277,69 @@ def process_ndx_grid_cycle(
         )
         new_cycle = create_waiting_grid_cycle(db, suggested_grid)
 
-        # 发送微信开仓建议通知 (异常隔离)
+        # 发送微信开仓建议通知 (异常隔离); message 完整写入 AlertLog
         if notifier:
             try:
-                notifier.send_ndx_entry_alert(new_cycle, current_price)
+                threshold = _resolve_rsi_threshold(config)
+                message = format_ndx_grid_entry(
+                    new_cycle, current_price, indicators=ndx_data, rsi_threshold=threshold
+                )
+                _notify_with_log(db, notifier, message, "NDX_GRID_ENTRY", "NDX Grid Entry Signal")
             except Exception as e:
                 logger.error(f"[NDX Monitor] Failed to send WeChat entry alert for cycle {new_cycle.id}: {e}")
+
+        # Entry 已触发 (RSI <= threshold): 离开 proximity 区域, 允许下个 cycle 重新提醒
+        dedup.clear_proximity()
 
         return {"status": "CREATED_WAITING", "cycle_id": new_cycle.id}
 
     logger.debug(f"[NDX Monitor] NDX price={current_price:.2f}: No entry signal met.")
+
+    # -------------------------------------------------------------
+    # 4. 接近入场阈值提醒 (独立事件, 仅提醒, 不影响状态机)
+    #    规则: threshold < RSI <= threshold + PROXIMITY_DISTANCE
+    #    去重: 同一 cycle 进入 proximity 区域只提醒一次 (dedup 状态型)
+    # -------------------------------------------------------------
+    _evaluate_proximity_alert(db, ndx_data, current_price, config, notifier)
+
     return {"status": "NO_SIGNAL"}
+
+
+def _evaluate_proximity_alert(
+    db: Session,
+    ndx_data: Dict[str, Any],
+    current_price: float,
+    config: Optional[Any],
+    notifier: Optional[WeChatNotifier],
+) -> None:
+    """🟡 接近入场阈值事件: RSI 进入 [threshold+ε, threshold+5] 区域时提醒一次。
+
+    - 只在无 RUNNING / 无 WAITING 时评估 (调用点保证)
+    - RSI 离开区域 -> 重置状态, 再次进入可再次提醒
+    - Entry 触发 / cycle 结束 -> 状态重置 (由各事件分支调用 clear_proximity)
+    """
+    rsi = ndx_data.get("rsi")
+    if not isinstance(rsi, (int, float)) or isinstance(rsi, bool):
+        dedup.mark_proximity_exit()
+        return
+
+    threshold = _resolve_rsi_threshold(config)
+    in_zone = threshold < rsi <= threshold + PROXIMITY_DISTANCE
+
+    if not in_zone:
+        # 离开 proximity 区域 (含 RSI <= threshold: 已触发/已越过)
+        dedup.mark_proximity_exit()
+        return
+
+    if notifier is None:
+        return
+
+    if not dedup.should_alert_proximity():
+        # 同一 cycle 已提醒过, 防止 scheduler 每 5 分钟重复推送
+        return
+
+    try:
+        message = format_ndx_grid_proximity(current_price, rsi, threshold, indicators=ndx_data)
+        _notify_with_log(db, notifier, message, "NDX_GRID_PROXIMITY", "NDX Grid Proximity Alert")
+    except Exception as e:
+        logger.error(f"[NDX Monitor] Failed to send proximity alert: {e}")

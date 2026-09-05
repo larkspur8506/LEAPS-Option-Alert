@@ -264,8 +264,8 @@ class TestGridClose(GridServiceTestBase):
         res = process_ndx_grid_cycle(self.db, ndx_data, notifier=mock_notifier, config=None)
 
         self.assertEqual(res["status"], "NO_SIGNAL")
-        mock_notifier.send_ndx_upper_alert.assert_not_called()
-        mock_notifier.send_ndx_lower_alert.assert_not_called()
+        mock_notifier.send_message.assert_not_called()
+        self.assertEqual(mock_notifier.send_message.call_count, 0)
 
         self.db.expire_all()
         closed = self.db.query(GridCycle).filter(GridCycle.id == self.cycle.id).first()

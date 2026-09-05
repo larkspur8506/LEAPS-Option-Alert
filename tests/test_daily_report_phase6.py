@@ -303,65 +303,71 @@ class TestNDXReportContent(DailyReportTestBase):
     def test_13_no_active_grid(self):
         """13. NO ACTIVE GRID -> 简洁显示, 不填充无意义字段"""
         msg = self._format(self._dashboard(), latest_cycle={"status": "CLOSED", "close_reason": "UPPER_REACHED", "id": 3})
-        self.assertIn("Grid Status\nCLOSED\nReason: UPPER_REACHED", msg)
-        self.assertNotIn("Base:", msg)
-        self.assertNotIn("Suggested", msg)
+        self.assertIn("当前：⚪ 无运行中的 Grid", msg)
+        self.assertIn("最近一轮：🟢 CLOSED（UPPER_REACHED）", msg)
+        self.assertNotIn("Base：", msg)
+        self.assertNotIn("Upper：", msg)
+        self.assertNotIn("Lower：", msg)
+        self.assertIn("默认区间：±20%", msg)
+        self.assertIn("网格：200格", msg)
+        self.assertIn("杠杆：5.0x", msg)
 
     def test_9_waiting_report_suggested_only(self):
-        """9. WAITING 日报只使用 suggested_*"""
+        """9. WAITING 日报只使用 suggested_* (需用户操作, 展开建议参数)"""
         cycle = create_waiting_grid_cycle(self.db, dict(SUGGESTED))
         ser = grid_service.serialize_cycle(cycle)
         msg = self._format(self._dashboard(waiting=ser))
-        self.assertIn("Grid Status\nWAITING — 等待用户确认并在交易所启动 Grid", msg)
-        self.assertIn("Suggested Base: 20,000.00", msg)
-        self.assertIn("Suggested Upper: 24,000.00", msg)
-        self.assertIn("Suggested Lower: 16,000.00", msg)
-        self.assertIn("Grid Count: 200", msg)
-        self.assertIn("Leverage: 5.0x", msg)
+        self.assertIn("当前：🟡 WAITING — 等待确认启动", msg)
+        self.assertIn("Base：20,000.00", msg)
+        self.assertIn("Upper：24,000.00", msg)
+        self.assertIn("Lower：16,000.00", msg)
+        self.assertIn("网格：200格", msg)
+        self.assertIn("杠杆：5.0x", msg)
         self.assertNotIn("actual_", msg)
         self.assertNotIn("Actual", msg)
+        # 无活动 Grid 时的默认参数区不应出现 (已展开 WAITING 参数)
+        self.assertNotIn("默认区间", msg)
 
     def test_10_running_report_actual_only(self):
-        """10/16. RUNNING 日报只使用 actual_*; suggested 不混淆"""
+        """10/16. RUNNING 日报显示状态, 不重复展开固定参数, suggested 不混淆"""
         cycle = create_waiting_grid_cycle(self.db, dict(SUGGESTED))
         grid_service.start_cycle(self.db, cycle.id, dict(VALID_ACTUAL))
         running = grid_service.get_running_cycle(self.db)
 
         msg = self._format(self._dashboard(running=running))
-        self.assertIn("Grid Status\nRUNNING", msg)
-        self.assertIn("Base: 20,000.00", msg)
-        self.assertIn("Grid Count: 150", msg)     # actual 150, 不是 suggested 200
-        self.assertIn("Leverage: 3.0x", msg)      # actual 3x, 不是 suggested 5x
-        self.assertIn("Margin: 1,000.00", msg)
-        # Grid Status 段内不得出现 suggested 值 (Grid Strategy 段的默认值 200/5x 属正常展示)
-        grid_status_section = msg.split("Grid Status\nRUNNING")[1]
-        self.assertIn("Grid Count: 150", grid_status_section)
-        self.assertNotIn("Grid Count: 200", grid_status_section)
-        self.assertNotIn("Leverage: 5.0x", grid_status_section)
+        self.assertIn("当前：🟢 RUNNING", msg)
+        # 日报不每天重复展开 Base/Upper/Lower/Grid 参数 (参数只在事件通知展开)
+        self.assertNotIn("Base：20,000.00", msg)
+        self.assertNotIn("Base：25,150.00", msg)
+        self.assertNotIn("网格：200格", msg)
+        self.assertNotIn("网格：150格", msg)
+        self.assertNotIn("杠杆：5.0x", msg)
+        self.assertNotIn("杠杆：3.0x", msg)
 
     def test_10b_running_report_actual_survives_strategy_change(self):
-        """10b. 默认策略变化后 RUNNING 日报仍显示用户实际参数 (150/3x)"""
+        """10b. 默认策略变化后 RUNNING 日报不受影响 (不展示策略默认参数)"""
         cycle = create_waiting_grid_cycle(self.db, dict(SUGGESTED))
         grid_service.start_cycle(self.db, cycle.id, dict(VALID_ACTUAL))
         running = grid_service.get_running_cycle(self.db)
 
         # 策略"变成" 200格/5x —— 传给 report 的 strategy 变了, 但 running cycle 不变
         msg = self._format(self._dashboard(running=running))
-        self.assertIn("Grid Count: 150", msg)
-        self.assertIn("Leverage: 3.0x", msg)
+        self.assertIn("当前：🟢 RUNNING", msg)
+        self.assertNotIn("杠杆：5.0x", msg)
+        self.assertNotIn("网格：200格", msg)
 
     def test_11_closed_report(self):
-        """11. CLOSED -> Grid Status CLOSED + Reason"""
+        """11. CLOSED -> 最近一轮 CLOSED + 原因"""
         msg = self._format(self._dashboard(), latest_cycle={"status": "CLOSED", "close_reason": "UPPER_REACHED", "id": 1})
-        self.assertIn("Grid Status\nCLOSED\nReason: UPPER_REACHED", msg)
+        self.assertIn("最近一轮：🟢 CLOSED（UPPER_REACHED）", msg)
 
     def test_12_stopped_report(self):
-        """12. STOPPED -> Grid Status STOPPED + Reason"""
+        """12. STOPPED -> 最近一轮 STOPPED + 原因"""
         msg = self._format(self._dashboard(), latest_cycle={"status": "STOPPED", "close_reason": "LOWER_BREACHED", "id": 2})
-        self.assertIn("Grid Status\nSTOPPED\nReason: LOWER_BREACHED", msg)
+        self.assertIn("最近一轮：🔴 STOPPED（LOWER_BREACHED）", msg)
 
     def test_14_stale_ndx_not_fake_signal(self):
-        """14. NDX 数据 stale -> Data: STALE, Entry Signal: NOT EVALUATED (不是 NO)"""
+        """14. NDX 数据 stale -> 数据状态：🟡 过期, 入场信号未评估 (不是 未触发)"""
         dash = self._dashboard()
         dash["ndx"] = {
             "last_price": 22000.0, "rsi": 30.0, "ma200": 19000.0,
@@ -370,11 +376,11 @@ class TestNDXReportContent(DailyReportTestBase):
             "data_timestamp": "2026-08-25 00:00:00-04:00",
         }
         msg = self._format(dash)
-        self.assertIn("Data: STALE", msg)
-        self.assertIn("Entry Signal\nNOT EVALUATED", msg)
+        self.assertIn("数据状态：🟡 过期", msg)
+        self.assertIn("状态：❓ 未评估", msg)
 
     def test_15_unavailable_ndx(self):
-        """15. NDX 数据完全不可用 -> N/A + NOT EVALUATED, 日报仍发送"""
+        """15. NDX 数据完全不可用 -> N/A + 未评估, 日报仍发送"""
         dash = self._dashboard()
         dash["ndx"] = {
             "last_price": None, "rsi": None, "ma200": None, "price_1y_ago": None,
@@ -382,10 +388,10 @@ class TestNDXReportContent(DailyReportTestBase):
             "data_timestamp": None,
         }
         msg = self._format(dash)
-        self.assertIn("Price: N/A", msg)
-        self.assertIn("RSI14: N/A", msg)
-        self.assertIn("Data: UNAVAILABLE", msg)
-        self.assertIn("Entry Signal\nNOT EVALUATED", msg)
+        self.assertIn("价格：N/A", msg)
+        self.assertIn("RSI(14)：N/A", msg)
+        self.assertIn("数据状态：🔴 不可用", msg)
+        self.assertIn("状态：❓ 未评估", msg)
 
     def test_17_18_dedup_single_report_per_day(self):
         """17/18. 同一天最多一份日报 (dedup key DAILY_REPORT); 第二次调用不再发送"""
@@ -441,11 +447,11 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
             "strategy": {"upper_pct": 0.20, "lower_pct": 0.20, "grid_count": 200, "leverage": 5.0},
         }
         msg = notifier.format_ndx_grid_report(report_data)
-        self.assertIn("NDX Market", msg)
-        self.assertIn("RSI14", msg)
-        self.assertIn("Grid Status", msg)
-        self.assertIn("Grid Strategy", msg)
-        self.assertIn("Entry Signal", msg)
+        self.assertIn("纳斯达克100", msg)
+        self.assertIn("RSI(14)", msg)
+        self.assertIn("Grid 状态", msg)
+        self.assertIn("Grid 入场信号", msg)
+        self.assertIn("市场状态", msg)
         # 多行，不是单行摘要
         self.assertGreater(msg.count("\n"), 5)
 
@@ -523,7 +529,7 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
         self.assertGreater(alert_log_message.count("\n"), 5)
 
     def test_D_alertlog_message_contains_key_fields(self):
-        """D. AlertLog.message 包含 NDX Market / RSI14 / Grid Status / Grid Strategy 等关键字段。"""
+        """D. AlertLog.message 包含 纳斯达克100 / RSI(14) / Grid 状态 / Grid 入场信号 等关键字段。"""
         from app.database.models import AlertLog
         import json
 
@@ -546,7 +552,7 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
         stored = json.loads(log.message)
         msg = stored["message"]
 
-        for keyword in ["NDX Market", "RSI14", "Grid Status", "Grid Strategy"]:
+        for keyword in ["纳斯达克100", "RSI(14)", "Grid 状态", "Grid 入场信号"]:
             self.assertIn(keyword, msg, f"AlertLog.message 应包含字段: {keyword}")
 
     def test_F_dedup_behavior_unchanged(self):

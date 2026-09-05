@@ -195,7 +195,7 @@ class TestSchedulerNoRollbackAfterCommit(unittest.TestCase):
         }
         # 通知器在发送时抛异常 (commit 已完成)
         faulty_notifier = MagicMock()
-        faulty_notifier.send_ndx_upper_alert.side_effect = ConnectionError("webhook down")
+        faulty_notifier.send_message.side_effect = ConnectionError("webhook down")
 
         # 需要带 webhook 的 config, monitor 才会构造 notifier 并发送
         mock_config = MagicMock()
@@ -212,7 +212,7 @@ class TestSchedulerNoRollbackAfterCommit(unittest.TestCase):
         self.assertEqual(cycle.status, "CLOSED")
         self.assertEqual(cycle.close_reason, "UPPER_REACHED")
         # 只通知一次, 下一轮不再触发
-        self.assertEqual(faulty_notifier.send_ndx_upper_alert.call_count, 1)
+        self.assertEqual(faulty_notifier.send_message.call_count, 1)
 
     def test_post_commit_exception_does_not_rollback_in_job_wrapper(self):
         """job 外层 except 分支不再调用 rollback: patch 验证"""

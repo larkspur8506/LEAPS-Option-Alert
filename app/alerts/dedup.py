@@ -9,6 +9,9 @@ class AlertDeduplicator:
     def __init__(self):
         self.daily_rules: Dict[str, Set[str]] = {}
         self.weekly_rules: Dict[str, Set[str]] = {}
+        # proximity 状态去重: 同一 Grid cycle 进入"接近入场区域"只提醒一次,
+        # RSI 离开区域 (或 cycle 结束/手动 reset) 后才允许再次提醒。
+        self.proximity_active: Dict[str, bool] = {}
 
     def get_today_key(self) -> str:
         return datetime.now(et_tz).strftime("%Y-%m-%d")
@@ -62,9 +65,34 @@ class AlertDeduplicator:
         for old_week in old_weeks:
             del self.weekly_rules[old_week]
 
+    def should_alert_proximity(self, cycle_key: str) -> bool:
+        """
+        接近入场阈值事件去重 (状态型, 非按日)。
+
+        规则: 同一 cycle key 首次进入 proximity 区域返回 True 并标记;
+        之后连续返回 False, 直到 mark_proximity_exit / clear_cycle 被调用
+        (RSI 离开区域、cycle 结束或系统 reset)。
+        """
+        if self.proximity_active.get(cycle_key):
+            return False
+        self.proximity_active[cycle_key] = True
+        return True
+
+    def mark_proximity_exit(self, cycle_key: str):
+        """RSI 离开 proximity 区域: 允许下次再进入时重新提醒"""
+        self.proximity_active.pop(cycle_key, None)
+
+    def clear_proximity(self, cycle_key: str):
+        """Grid cycle 结束 / 系统明确 reset: 清除该 cycle 的 proximity 状态"""
+        self.proximity_active.pop(cycle_key, None)
+
+    def is_proximity_active(self, cycle_key: str) -> bool:
+        return bool(self.proximity_active.get(cycle_key))
+
     def clear(self):
         self.daily_rules.clear()
         self.weekly_rules.clear()
+        self.proximity_active.clear()
 
 
 _deduplicator = AlertDeduplicator()
@@ -75,6 +103,22 @@ def should_alert(rule_name: str, position_id: int = None) -> bool:
 
 def should_alert_weekly(rule_name: str, position_id: int = None) -> bool:
     return _deduplicator.should_alert_weekly(rule_name, position_id)
+
+
+# 接近入场阈值 (proximity) 事件: 状态型去重, 独立于按日/按周 key
+PROXIMITY_KEY = "NDX_GRID_PROXIMITY"
+
+def should_alert_proximity(cycle_key: str = PROXIMITY_KEY) -> bool:
+    return _deduplicator.should_alert_proximity(cycle_key)
+
+def mark_proximity_exit(cycle_key: str = PROXIMITY_KEY) -> None:
+    _deduplicator.mark_proximity_exit(cycle_key)
+
+def clear_proximity(cycle_key: str = PROXIMITY_KEY) -> None:
+    _deduplicator.clear_proximity(cycle_key)
+
+def is_proximity_active(cycle_key: str = PROXIMITY_KEY) -> bool:
+    return _deduplicator.is_proximity_active(cycle_key)
 
 
 def reset_daily_dedup():

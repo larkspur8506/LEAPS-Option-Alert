@@ -14,7 +14,7 @@ Authentication reuses the existing admin cookie mechanism
 State transitions delegate to the Phase 2 state machine via the
 service layer (app/services/grid_service.py).
 """
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -27,6 +27,17 @@ from app.services.grid_service import (
     GridCycleStateError,
     GridParameterError,
 )
+from app.notification.wechat import (
+    WeChatNotifier,
+    format_ndx_grid_manual_close,
+    get_wechat_notifier,
+)
+from app.alerts.alert_log import log_alert
+from app.alerts import dedup
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/grid", tags=["grid"])
 
@@ -42,6 +53,20 @@ def require_admin(request: Request) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated"
         )
+
+
+def _get_wechat_notifier() -> Optional[WeChatNotifier]:
+    """惰性获取全局运行时配置中的 webhook (避免与 app.main 循环导入); 未配置返回 None"""
+    try:
+        from app.main import config
+
+        if config is not None and hasattr(config, "get_wechat_webhook_url"):
+            webhook_url = config.get_wechat_webhook_url()
+            if webhook_url:
+                return get_wechat_notifier(webhook_url)
+    except Exception:
+        pass
+    return None
 
 
 def _get_ndx_data() -> Dict[str, Any]:
@@ -128,8 +153,27 @@ def close_cycle(
 ):
     """RUNNING -> CLOSED / MANUAL_CLOSE: 记录用户已手动结束网格 (不操作交易所)"""
     try:
-        return grid_service.close_running_cycle(db, cycle_id)
+        result = grid_service.close_running_cycle(db, cycle_id)
     except GridCycleNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except GridCycleStateError as e:
         raise HTTPException(status_code=HTTP_CONFLICT, detail=str(e))
+
+    # 状态变化通知 (🔄 手动关闭): 通知/日志失败不影响已提交的状态变更
+    try:
+        notifier = _get_wechat_notifier()
+        if notifier is not None:
+            message = format_ndx_grid_manual_close(result)
+            try:
+                success = bool(notifier.send_message(message))
+            except Exception as e:
+                logger.error(f"Failed to send manual close notification: {e}")
+                success = False
+            log_alert(db, "NDX_GRID_MANUAL_CLOSE", "NDX Grid Manual Close", message, success)
+    except Exception as e:
+        logger.warning(f"manual close notification skipped: {e}")
+
+    # cycle 结束: 允许下一个 cycle 重新触发 proximity 提醒
+    dedup.clear_proximity()
+
+    return result
