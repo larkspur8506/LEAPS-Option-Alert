@@ -1,7 +1,7 @@
 """
 NDX Grid Monitor and Evaluation Engine.
 Drives the GridCycle lifecycle based on incoming NDX market data:
-- RUNNING cycle: monitors upper/lower boundaries (>= actual_upper -> CLOSED, < actual_lower -> STOPPED)
+- RUNNING cycle: monitors upper/lower boundaries (>= actual_upper -> CLOSED, <= actual_lower -> STOPPED)
 - No RUNNING and no WAITING: evaluates entry signals -> creates WAITING
 - Idempotent: once CLOSED/STOPPED or WAITING, avoids duplicate triggers/notifications
 - Resilient: WeChat notification failures do not roll back state transitions
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.alerts.grid_cycle import (
     get_running_grid_cycle,
     get_waiting_grid_cycle,
+    get_latest_stopped_grid_cycle,
     create_waiting_grid_cycle,
     close_grid_cycle,
     stop_grid_cycle
@@ -31,6 +32,7 @@ from app.notification.wechat import (
     format_ndx_grid_proximity,
     format_ndx_grid_closed,
     format_ndx_grid_stopped,
+    format_ndx_grid_stop_loss,
 )
 from app.scheduler.trading_hours import get_latest_trading_day
 
@@ -41,6 +43,20 @@ et_tz = timezone("America/New_York")
 # 接近入场阈值 (proximity) 规则: threshold < RSI <= threshold + PROXIMITY_DISTANCE
 PROXIMITY_DISTANCE = 5.0
 DEFAULT_RSI_THRESHOLD = 35.0
+# Lower 被跌破后再向下触发止损提醒的默认比例 (可被运行时配置覆盖)
+DEFAULT_STOP_LOSS_AFTER_LOWER_PCT = 0.10
+
+
+def _resolve_stop_loss_after_lower_pct(config: Optional[Any]) -> float:
+    """从运行时配置读取止损观察比例; 缺失/非法时回退默认 0.10"""
+    try:
+        if config and hasattr(config, "get_default_grid_stop_loss_after_lower_pct"):
+            value = config.get_default_grid_stop_loss_after_lower_pct()
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < 1:
+                return float(value)
+    except Exception:
+        pass
+    return DEFAULT_STOP_LOSS_AFTER_LOWER_PCT
 
 
 def _resolve_rsi_threshold(config: Optional[Any]) -> float:
@@ -166,6 +182,9 @@ def process_ndx_grid_cycle(
     4. 若既无 RUNNING 也无 WAITING:
        - 计算 NDX 开仓信号
        - 信号成立则创建 WAITING 周期并发送建议通知
+    5. 若存在 STOPPED 周期 (风险观察阶段):
+       - 价格从 Lower 继续下跌到止损提醒线 (lower * (1 - pct)) 时,
+         发送一次 NDX_GRID_STOP_LOSS 提醒 (cycle 级去重, 不改变 GridCycle 状态)
     """
     if not ndx_data or not ndx_data.get("is_data_valid", True) or not ndx_data.get("last_price"):
         logger.warning("[NDX Monitor] No valid NDX market data provided, skipping check.")
@@ -225,10 +244,10 @@ def process_ndx_grid_cycle(
 
             return {"status": "CLOSED", "reason": "UPPER_REACHED", "cycle_id": closed_cycle.id}
 
-        # 下限触发: current_price < actual_lower_price (严格小于)
-        elif lower is not None and current_price < lower:
+        # 下限触发: current_price <= actual_lower_price (含等于; 跌破下轨即停止, 进入风险观察)
+        elif lower is not None and current_price <= lower:
             logger.info(
-                f"[NDX Monitor] Lower boundary breached: price={current_price:.2f} < actual_lower={lower:.2f}. "
+                f"[NDX Monitor] Lower boundary breached: price={current_price:.2f} <= actual_lower={lower:.2f}. "
                 f"Stopping cycle ID={running_cycle.id} with LOWER_BREACHED."
             )
             # 状态变更优先于通知并提交事务
@@ -237,7 +256,12 @@ def process_ndx_grid_cycle(
             # 发送微信通知 (异常隔离，不影响已持久化的状态)
             if notifier:
                 try:
-                    message = format_ndx_grid_stopped(stopped_cycle, current_price, indicators=ndx_data)
+                    message = format_ndx_grid_stopped(
+                        stopped_cycle,
+                        current_price,
+                        indicators=ndx_data,
+                        stop_loss_after_lower_pct=_resolve_stop_loss_after_lower_pct(config),
+                    )
                     _notify_with_log(db, notifier, message, "NDX_GRID_STOPPED", "NDX Grid Lower Breached")
                 except Exception as e:
                     logger.error(f"[NDX Monitor] Failed to send WeChat lower alert for cycle {stopped_cycle.id}: {e}")
@@ -253,6 +277,27 @@ def process_ndx_grid_cycle(
                 f"[{lower:.2f}, {upper:.2f}]. Price={current_price:.2f}."
             )
             return {"status": "RUNNING_NO_CHANGE", "cycle_id": running_cycle.id}
+
+    # -------------------------------------------------------------
+    # 1b. STOPPED 风险观察: 止损提醒事件 (独立通知, 不改 GridCycle 状态)
+    #     仅在无 RUNNING 周期时评估 (网格运行中不可能同时处于 STOPPED 观察)。
+    #     触发 (price <= Lower * (1 - pct)) 且未重复时提前结束本轮,
+    #     否则继续常规流程 (WAITING / Entry / Proximity 不受影响)。
+    # -------------------------------------------------------------
+    stop_loss_result = _evaluate_stop_loss_alert(db, ndx_data, current_price, config, notifier)
+    if stop_loss_result and stop_loss_result.get("triggered") \
+            and not stop_loss_result.get("deduplicated"):
+        logger.info(
+            f"[NDX Monitor] Stop loss alert dispatched: cycle ID={stop_loss_result.get('cycle_id')} "
+            f"price={current_price:.2f} <= stop_loss_alert_price="
+            f"{stop_loss_result.get('stop_loss_alert_price'):.2f}. Cycle remains STOPPED."
+        )
+        return {
+            "status": "STOP_LOSS_ALERTED",
+            "cycle_id": stop_loss_result.get("cycle_id"),
+            "stop_loss_alert_price": stop_loss_result.get("stop_loss_alert_price"),
+            "notified": stop_loss_result.get("notified", False),
+        }
 
     # -------------------------------------------------------------
     # 2. 查询 WAITING 周期
@@ -302,7 +347,92 @@ def process_ndx_grid_cycle(
     # -------------------------------------------------------------
     _evaluate_proximity_alert(db, ndx_data, current_price, config, notifier)
 
-    return {"status": "NO_SIGNAL"}
+    result = {"status": "NO_SIGNAL"}
+    if stop_loss_result:
+        result["stop_loss"] = stop_loss_result
+    return result
+
+
+def _evaluate_stop_loss_alert(
+    db: Session,
+    ndx_data: Dict[str, Any],
+    current_price: float,
+    config: Optional[Any],
+    notifier: Optional[WeChatNotifier],
+) -> Optional[Dict[str, Any]]:
+    """
+    🛑 止损提醒事件 (独立通知事件, 不修改 GridCycle 状态)。
+
+    触发: 最近一个 STOPPED cycle 的价格满足 current_price <= lower * (1 - pct)
+    - pct 来自运行时配置 DEFAULT_GRID_STOP_LOSS_AFTER_LOWER_PCT (默认 0.10)
+    - 仅当该 cycle 存在实际下轨参数时评估 (无 actual_lower 不评估, 不虚构)
+    - cycle 级 dedup: 同一 GridCycle id 只发送一次 (价格继续下跌不重复报警)
+    - 反弹不触发; 触发后状态仍为 STOPPED, 不自动恢复 / 不自动平仓 / 不自动重建
+
+    返回 None 表示当前没有需要止损观察的 STOPPED cycle。
+    """
+    stopped_cycle = get_latest_stopped_grid_cycle(db)
+    if stopped_cycle is None:
+        return None
+
+    lower = stopped_cycle.actual_lower_price
+    if lower is None or lower <= 0:
+        return {"evaluated": False, "reason": "NO_ACTUAL_LOWER"}
+
+    pct = _resolve_stop_loss_after_lower_pct(config)
+    # 止损提醒线 = Lower × (1 - pct) (百分比相对 Lower, 而非 Base); 保留 2 位小数
+    alert_price = round(float(lower) * (1.0 - pct), 2)
+
+    if current_price > alert_price:
+        return {
+            "evaluated": True,
+            "triggered": False,
+            "stop_loss_alert_price": alert_price,
+            "cycle_id": stopped_cycle.id,
+        }
+
+    if notifier is None:
+        # 未配置 webhook: 不发送, 也不占用该 cycle 的去重名额 (配置后仍可提醒)
+        return {
+            "evaluated": True,
+            "triggered": True,
+            "deduplicated": False,
+            "stop_loss_alert_price": alert_price,
+            "cycle_id": stopped_cycle.id,
+            "notified": False,
+        }
+
+    cycle_key = dedup.stop_loss_cycle_key(stopped_cycle.id)
+    if not dedup.should_alert_stop_loss(cycle_key):
+        # 同一 cycle 已发送过止损提醒, 价格继续下跌不再重复推送
+        return {
+            "evaluated": True,
+            "triggered": True,
+            "deduplicated": True,
+            "stop_loss_alert_price": alert_price,
+            "cycle_id": stopped_cycle.id,
+        }
+
+    notified = False
+    try:
+        message = format_ndx_grid_stop_loss(
+            stopped_cycle,
+            current_price,
+            indicators=ndx_data,
+            stop_loss_after_lower_pct=pct,
+        )
+        notified = _notify_with_log(db, notifier, message, "NDX_GRID_STOP_LOSS", "NDX Grid Stop Loss Alert")
+    except Exception as e:
+        logger.error(f"[NDX Monitor] Failed to send WeChat stop loss alert for cycle {stopped_cycle.id}: {e}")
+
+    return {
+        "evaluated": True,
+        "triggered": True,
+        "deduplicated": False,
+        "notified": notified,
+        "stop_loss_alert_price": alert_price,
+        "cycle_id": stopped_cycle.id,
+    }
 
 
 def _evaluate_proximity_alert(

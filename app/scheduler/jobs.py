@@ -3,7 +3,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 from datetime import datetime
 import logging
 
-from .trading_hours import is_trading_time, get_current_time_et
+from .trading_hours import is_trading_time, get_current_time_et, is_trading_day
 from app.market.data_fetcher import DataFetcher
 from app.alerts import dedup
 from app.alerts.alert_log import log_alert
@@ -95,8 +95,17 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
     latest_cycles = grid_service.get_cycle_history(db, 1)["cycles"]
     latest_cycle = latest_cycles[0] if latest_cycles else None
 
+    # 最新一轮为 STOPPED 时, 日报展示止损观察状态 (是否已触发止损提醒, 由 dedup 状态判定)
+    stop_loss_alerted = False
+    if latest_cycle and latest_cycle.get("status") == "STOPPED":
+        from app.alerts.dedup import stop_loss_cycle_key, is_stop_loss_alerted
+        stop_loss_alerted = is_stop_loss_alerted(stop_loss_cycle_key(latest_cycle["id"]))
+
     # Grid 策略默认参数 (来自运行时配置, 与 rules 页展示一致)
-    strategy = {"upper_pct": 0.20, "lower_pct": 0.20, "grid_count": 200, "leverage": 5.0}
+    strategy = {
+        "upper_pct": 0.20, "lower_pct": 0.20, "grid_count": 200, "leverage": 5.0,
+        "stop_loss_after_lower_pct": 0.10,
+    }
     if config:
         try:
             strategy = {
@@ -104,6 +113,7 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
                 "lower_pct": config.get_default_grid_lower_pct(),
                 "grid_count": config.get_default_grid_count(),
                 "leverage": config.get_default_grid_leverage(),
+                "stop_loss_after_lower_pct": config.get_default_grid_stop_loss_after_lower_pct(),
             }
         except Exception as e:
             logger.warning(f"DAILY_REPORT strategy config fallback to defaults: {e}")
@@ -118,6 +128,7 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
         "date": report_date,
         "dashboard": dashboard,
         "latest_cycle": latest_cycle,
+        "stop_loss_alerted": stop_loss_alerted,
         "strategy": strategy,
         "breadth": breadth,
     }
@@ -148,7 +159,15 @@ def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):
     读取 daily_report_mode 运行时配置: off / ndx_grid, 每天只发送一份。
     默认 ndx_grid (历史 'legacy' 配置由 Config 读取层归一化为 ndx_grid)。
     任何异常只影响本次日报, 不影响其他 scheduler job。
+    美国市场全天休市日 (周末/节假日) 不生成、不发送日报;
+    提前收市日仍是有效交易日, 正常发送日报。
     """
+    # 美国市场全天休市日 -> 跳过日报 (复用 trading_hours 的 NYSE 交易日历判断,
+    # 判定的是"是否为有效交易日", 而非"是否处于交易时段", 因此提前收市日照常发送)
+    if not is_trading_day():
+        logger.info("Daily report skipped: US market is closed today")
+        return {"status": "SKIPPED", "reason": "MARKET_CLOSED"}
+
     close_session = False
     session = db
     if session is None:

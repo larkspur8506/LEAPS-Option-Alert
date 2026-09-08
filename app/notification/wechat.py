@@ -21,6 +21,8 @@ DEFAULT_UPPER_PCT = 0.20
 DEFAULT_LOWER_PCT = 0.20
 DEFAULT_GRID_COUNT = 200
 DEFAULT_LEVERAGE = 5.0
+# Lower 被跌破后再向下触发止损提醒的默认比例 (运行时可覆盖)
+DEFAULT_STOP_LOSS_AFTER_LOWER_PCT = 0.10
 
 
 def _redact_secrets(text: str) -> str:
@@ -62,6 +64,26 @@ def _fmt_leverage(value: Any) -> str:
 
 def _fmt_grid_count(value: Any) -> str:
     return f"{int(value)}格" if _is_num(value) else "N/A"
+
+
+def _fmt_pct_compact(value: Any) -> str:
+    """紧凑百分比: 0.10 -> '10%', 0.05 -> '5%', 0.125 -> '12.5%'"""
+    if not _is_num(value):
+        return "N/A"
+    return f"{value * 100:.2f}".rstrip("0").rstrip(".") + "%"
+
+
+def _stop_loss_alert_price(lower_price: Any, stop_loss_after_lower_pct: Any) -> Optional[float]:
+    """
+    止损提醒线 = Lower × (1 - stop_loss_after_lower_pct)。
+    百分比相对于 Lower (而非 Base); 数据不完整时返回 None (渲染 N/A)。
+    """
+    if (
+        _is_num(lower_price) and lower_price > 0
+        and _is_num(stop_loss_after_lower_pct) and 0 < stop_loss_after_lower_pct < 1
+    ):
+        return round(float(lower_price) * (1.0 - float(stop_loss_after_lower_pct)), 2)
+    return None
 
 
 def _change_pct(prev_close: Any, current: Any) -> Optional[float]:
@@ -246,22 +268,37 @@ def format_ndx_grid_stopped(
     cycle: Any,
     current_price: float,
     indicators: Optional[Dict[str, Any]] = None,
+    stop_loss_after_lower_pct: Any = DEFAULT_STOP_LOSS_AFTER_LOWER_PCT,
     now: Optional[datetime] = None,
 ) -> str:
-    """🔴 Grid Lower / STOPPED (RUNNING -> STOPPED, 触及下限)"""
+    """🔴 Grid 跌破下轨 / STOPPED (RUNNING -> STOPPED, 进入风险观察阶段)
+
+    重要语义: STOPPED != 已止损。跌破 Lower 只是停止网格运行并进入风险观察,
+    只有价格从 Lower 继续下跌 stop_loss_after_lower_pct (默认 10%) 才发送止损提醒。
+    """
     indicators = indicators or {}
+    if not _is_num(stop_loss_after_lower_pct) or not (0 < stop_loss_after_lower_pct < 1):
+        stop_loss_after_lower_pct = DEFAULT_STOP_LOSS_AFTER_LOWER_PCT
     reason = _get(cycle, "close_reason") or "LOWER_BREACHED"
+    lower = _get(cycle, "actual_lower_price")
+    stop_loss_price = _stop_loss_alert_price(lower, stop_loss_after_lower_pct)
+    pct_text = _fmt_pct_compact(stop_loss_after_lower_pct)
 
     lines = [
-        "🛑 NDX Grid 已触及下限",
+        "🛑 NDX Grid 已跌破下轨",
         SEPARATOR,
         f"📅 {_fmt_date_cn(now, with_time=True)}",
         "",
-        "⚠️ Grid 下限已触发",
+        "⚠️ Grid 已跌破 Lower，进入风险观察区",
         "",
     ]
     lines += _market_section(current_price, indicators)
     lines += [
+        "",
+        "🎯 风险观察",
+        f"Grid Lower：{_fmt_price(lower)}",
+        f"止损提醒线：{_fmt_price(stop_loss_price)}",
+        f"当前价格：{_fmt_price(current_price)}",
         "",
         "📐 当前 Grid",
     ]
@@ -270,16 +307,79 @@ def format_ndx_grid_stopped(
         "",
         "🔴 Grid 状态",
         "状态：STOPPED",
-        f"触发原因：{reason}",
+        "原因：价格跌破 Lower",
         "",
         "💡 操作提示",
-        "当前 Grid 已进入停止状态。",
-        "请检查交易所实际 Grid 状态,",
-        "系统不会自动重新建立 Grid。",
+        "Grid 已停止运行，目前进入风险观察阶段。",
+        f"如果 NDX 从 Lower 继续下跌 {pct_text}，",
+        "系统将发送止损提醒。",
+        "",
+        "系统不会自动平仓，",
+        "也不会自动重新建立 Grid。",
         "",
         SEPARATOR,
-        "⚠️ 本系统不连接交易所,",
-        "不会自动平仓或重新开仓。",
+        "⚠️ 本系统仅提供行情、Grid 状态及风险提醒，",
+        "不连接交易所，不自动交易。",
+    ]
+    return "\n".join(lines)
+
+
+def format_ndx_grid_stop_loss(
+    cycle: Any,
+    current_price: float,
+    indicators: Optional[Dict[str, Any]] = None,
+    stop_loss_after_lower_pct: Any = DEFAULT_STOP_LOSS_AFTER_LOWER_PCT,
+    now: Optional[datetime] = None,
+) -> str:
+    """🛑 NDX Grid 止损提醒 (Lower 被跌破后继续下跌 stop_loss_after_lower_pct)
+
+    独立通知事件: 不改变 GridCycle 状态 (仍为 STOPPED), 不自动平仓, 不自动重建 Grid。
+    止损提醒线 = actual_lower_price × (1 - stop_loss_after_lower_pct)。
+    """
+    indicators = indicators or {}
+    if not _is_num(stop_loss_after_lower_pct) or not (0 < stop_loss_after_lower_pct < 1):
+        stop_loss_after_lower_pct = DEFAULT_STOP_LOSS_AFTER_LOWER_PCT
+    lower = _get(cycle, "actual_lower_price")
+    stop_loss_price = _stop_loss_alert_price(lower, stop_loss_after_lower_pct)
+    pct_text = _fmt_pct_compact(stop_loss_after_lower_pct)
+
+    lines = [
+        "🛑 NDX Grid 止损提醒",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        f"⚠️ NDX 已跌破 Grid 下轨，并进一步下跌 {pct_text}",
+        "",
+    ]
+    lines += _market_section(current_price, indicators)
+    lines += [
+        "",
+        "🎯 风险观察",
+        f"Grid Lower：{_fmt_price(lower)}",
+        f"止损提醒线：{_fmt_price(stop_loss_price)}",
+        f"当前价格：{_fmt_price(current_price)}",
+        "状态：🔴 已触发",
+        "",
+        "📐 当前 Grid",
+    ]
+    lines += _actual_grid_params(cycle)
+    lines += [
+        "",
+        "🔴 Grid 状态",
+        "状态：STOPPED",
+        f"原因：价格跌破 Lower 后继续下跌 {pct_text}",
+        "",
+        "💡 操作提示",
+        "当前已经触发止损提醒。",
+        "请检查交易所实际 Grid 及持仓情况，",
+        "并根据实际情况手动处理。",
+        "",
+        "系统不会自动平仓，",
+        "也不会自动重新建立 Grid。",
+        "",
+        SEPARATOR,
+        "⚠️ 本系统仅提供行情、Grid 状态及风险提醒，",
+        "不连接交易所，不自动交易。",
     ]
     return "\n".join(lines)
 
@@ -440,6 +540,12 @@ def format_ndx_grid_daily_report(data: Dict, now: Optional[datetime] = None) -> 
     lower_pct = strategy.get("lower_pct", DEFAULT_LOWER_PCT)
     grid_count = strategy.get("grid_count", DEFAULT_GRID_COUNT)
     leverage = strategy.get("leverage", DEFAULT_LEVERAGE)
+    stop_loss_after_lower_pct = strategy.get(
+        "stop_loss_after_lower_pct", DEFAULT_STOP_LOSS_AFTER_LOWER_PCT
+    )
+    if not _is_num(stop_loss_after_lower_pct) or not (0 < stop_loss_after_lower_pct < 1):
+        stop_loss_after_lower_pct = DEFAULT_STOP_LOSS_AFTER_LOWER_PCT
+    stop_loss_alerted = bool(data.get("stop_loss_alerted"))
 
     # 数据状态 (明确规则, 无主观判断)
     data_valid = bool(ndx.get("is_data_valid"))
@@ -523,21 +629,41 @@ def format_ndx_grid_daily_report(data: Dict, now: Optional[datetime] = None) -> 
             f"杠杆：{_fmt_leverage(_get(waiting, 'suggested_leverage'))}",
         ]
     else:
-        lines.append("当前：⚪ 无运行中的 Grid")
-        if latest and latest.get("status"):
-            status_text = _CYCLE_STATUS_TEXT.get(latest.get("status"), latest.get("status"))
-            if latest.get("close_reason"):
-                status_text += f"（{latest.get('close_reason')}）"
-            lines.append(f"最近一轮：{status_text}")
-        if _is_num(upper_pct) and _is_num(lower_pct) and upper_pct == lower_pct:
-            range_text = f"±{upper_pct * 100:.0f}%"
+        # 最新一轮为 STOPPED 时展开风险观察详情 (最近一轮 CLOSED 仍走简洁展示)
+        latest_is_stopped = bool(latest) and latest.get("status") == "STOPPED"
+        if latest_is_stopped:
+            if stop_loss_alerted:
+                lines.append("当前：🛑 STOPPED / 已触发止损提醒")
+            else:
+                lines.append("当前：🔴 STOPPED / 风险观察")
+            stop_loss_price = _stop_loss_alert_price(
+                latest.get("actual_lower_price"), stop_loss_after_lower_pct
+            )
+            lines += [
+                "",
+                f"Base：{_fmt_price(latest.get('actual_base_price'))}",
+                f"Upper：{_fmt_price(latest.get('actual_upper_price'))}",
+                f"Lower：{_fmt_price(latest.get('actual_lower_price'))}",
+                f"止损提醒线：{_fmt_price(stop_loss_price)}",
+                f"网格：{_fmt_grid_count(latest.get('actual_grid_count'))}",
+                f"杠杆：{_fmt_leverage(latest.get('actual_leverage'))}",
+            ]
         else:
-            range_text = f"+{_fmt_num(upper_pct * 100, 0)}% / -{_fmt_num(lower_pct * 100, 0)}%"
-        lines += [
-            f"默认区间：{range_text}",
-            f"网格：{_fmt_grid_count(grid_count)}",
-            f"杠杆：{_fmt_leverage(leverage)}",
-        ]
+            lines.append("当前：⚪ 无运行中的 Grid")
+            if latest and latest.get("status"):
+                status_text = _CYCLE_STATUS_TEXT.get(latest.get("status"), latest.get("status"))
+                if latest.get("close_reason"):
+                    status_text += f"（{latest.get('close_reason')}）"
+                lines.append(f"最近一轮：{status_text}")
+            if _is_num(upper_pct) and _is_num(lower_pct) and upper_pct == lower_pct:
+                range_text = f"±{upper_pct * 100:.0f}%"
+            else:
+                range_text = f"+{_fmt_num(upper_pct * 100, 0)}% / -{_fmt_num(lower_pct * 100, 0)}%"
+            lines += [
+                f"默认区间：{range_text}",
+                f"网格：{_fmt_grid_count(grid_count)}",
+                f"杠杆：{_fmt_leverage(leverage)}",
+            ]
 
     # 市场状态: 纯事实规则生成, 不含建议/预测
     market_lines = []

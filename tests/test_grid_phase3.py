@@ -2,7 +2,7 @@
 Unit Tests for Phase 3:
 - NDX Periodic Monitoring
 - Entry Signal Trigger & WAITING Creation
-- RUNNING Boundary Monitoring (Upper >= actual_upper -> CLOSED, Lower < actual_lower -> STOPPED)
+- RUNNING Boundary Monitoring (Upper >= actual_upper -> CLOSED, Lower <= actual_lower -> STOPPED)
 - WeChat Notification Dispatch & Idempotency
 - WeChat Failure Resilience (no DB rollback)
 - Market Data Fetch Failure Resilience
@@ -383,8 +383,8 @@ class TestGridPhase3(unittest.TestCase):
         self.assertEqual(cycle.close_reason, "LOWER_BREACHED")
         self.assertIsNotNone(cycle.closed_at)
 
-    def test_9_running_current_equals_actual_lower_does_not_trigger_stopped(self):
-        """9. RUNNING + current == actual_lower -> 不触发 LOWER_BREACHED (严格要求 < lower)"""
+    def test_9_running_current_equals_actual_lower_triggers_stopped(self):
+        """9. RUNNING + current == actual_lower -> STOPPED (下轨触发含等于边界)"""
         suggested = {
             "base_price": 20000.0,
             "upper_price": 24000.0,
@@ -417,10 +417,12 @@ class TestGridPhase3(unittest.TestCase):
             check_trading_hours=False
         )
 
-        self.assertEqual(res["status"], "RUNNING_NO_CHANGE")
+        self.assertEqual(res["status"], "STOPPED")
+        self.assertEqual(res["reason"], "LOWER_BREACHED")
         self.db.refresh(cycle)
-        self.assertEqual(cycle.status, "RUNNING")
-        self.assertIsNone(cycle.closed_at)
+        self.assertEqual(cycle.status, "STOPPED")
+        self.assertEqual(cycle.close_reason, "LOWER_BREACHED")
+        self.assertIsNotNone(cycle.closed_at)
 
     # -------------------------------------------------------------
     # Notification Tests (10-13)
@@ -513,7 +515,7 @@ class TestGridPhase3(unittest.TestCase):
         self.mock_notifier.send_message.assert_called_once()
         args, _ = self.mock_notifier.send_message.call_args
         message = args[0]
-        self.assertIn("已触及下限", message)
+        self.assertIn("已跌破下轨", message)
         self.assertIn("STOPPED", message)
 
     def test_13_wechat_failure_does_not_rollback_state_change(self):

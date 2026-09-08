@@ -4,7 +4,7 @@ Unified NDX Grid Notification Tests.
 Covers (任务 17):
 A. Entry notification: 中文/emoji/价格/RSI/阈值/距离/Base/Upper/Lower/网格数/每格/杠杆
 B. Proximity notification: 模板 + 进入发送/同 cycle 不重复/离开再进入可再发/Entry 后不再发送
-C. STOPPED: Lower/STOPPED/Grid 参数/操作提示/不声称自动平仓
+C. STOPPED: 跌破下轨进入风险观察 (≠已止损)/止损提醒线/参数/操作提示
 D. CLOSED: Upper/CLOSED/Grid 参数/新 cycle 等待 Entry/不声称自动交易
 E. Data stale: STALE/监控跳过/不触发 Grid signal
 F. Data unavailable: UNAVAILABLE/监控跳过/不触发 Grid signal
@@ -32,6 +32,7 @@ from app.notification.wechat import (
     format_ndx_grid_entry,
     format_ndx_grid_proximity,
     format_ndx_grid_stopped,
+    format_ndx_grid_stop_loss,
     format_ndx_grid_closed,
     format_ndx_grid_manual_close,
     format_ndx_grid_data_stale,
@@ -331,26 +332,32 @@ class TestStoppedNotification(NotificationTestBase):
         return cycle
 
     def test_C_stopped_message_template(self):
-        """C. STOPPED 模板: Lower/STOPPED/参数/操作提示/不声称自动平仓"""
+        """C. STOPPED 模板: 跌破下轨进入风险观察 (≠已止损)/Lower/止损提醒线/参数/操作提示"""
         cycle = dict(VALID_ACTUAL)
         cycle["close_reason"] = "LOWER_BREACHED"
         indicators = {"rsi": 28.60, "ma200": 26980.20, "prev_close": 23858.66}
         msg = format_ndx_grid_stopped(cycle, 23080.40, indicators=indicators)
 
-        self.assertIn("🛑 NDX Grid 已触及下限", msg)
-        self.assertIn("价格：23,080.40", msg)
+        self.assertIn("🛑 NDX Grid 已跌破下轨", msg)
+        self.assertIn("进入风险观察区", msg)
+        self.assertIn("当前价格：23,080.40", msg)
         self.assertIn("-3.26%", msg)
         self.assertIn("RSI(14)：28.60", msg)
         self.assertIn("Base：28,920.50", msg)
         self.assertIn("Upper：34,704.60", msg)
         self.assertIn("Lower：23,136.40", msg)
+        # 止损提醒线 = 23,136.40 × (1 - 0.10) = 20,822.76
+        self.assertIn("止损提醒线：20,822.76", msg)
         self.assertIn("网格：200格", msg)
         self.assertIn("杠杆：5.0x", msg)
         self.assertIn("状态：STOPPED", msg)
-        self.assertIn("触发原因：LOWER_BREACHED", msg)
-        self.assertIn("请检查交易所实际 Grid 状态", msg)
-        self.assertIn("不会自动平仓或重新开仓", msg)
-        # 不声称已自动平仓 / 已取消交易所网格
+        self.assertIn("原因：价格跌破 Lower", msg)
+        self.assertIn("如果 NDX 从 Lower 继续下跌 10%", msg)
+        self.assertIn("系统将发送止损提醒", msg)
+        self.assertIn("不会自动平仓", msg)
+        self.assertIn("不会自动重新建立 Grid", msg)
+        # STOPPED ≠ 已止损: 不声称已触发止损提醒 / 已自动平仓 / 已取消交易所网格
+        self.assertNotIn("已触发止损提醒", msg)
         self.assertNotIn("已自动平仓", msg)
         self.assertNotIn("已取消", msg)
         self.assertNotIn("已平仓", msg)
@@ -366,7 +373,7 @@ class TestStoppedNotification(NotificationTestBase):
         self.assertEqual(self.mock_notifier.send_message.call_count, 1)
         sent = self.mock_notifier.send_message.call_args[0][0]
         self.assertIn("STOPPED", sent)
-        self.assertIn("LOWER_BREACHED", sent)
+        self.assertIn("价格跌破 Lower", sent)
 
         # 下一轮 (无 RUNNING) 不再发送 STOPPED
         self.mock_fetcher.get_ndx_data.return_value = make_ndx_data(price=23000.0, rsi=50.0)
@@ -647,6 +654,7 @@ class TestSecretRedactionUnified(NotificationTestBase):
             format_ndx_grid_entry(cycle, 28920.50, indicators=indicators, rsi_threshold=35.0),
             format_ndx_grid_proximity(29180.20, 37.2, 35.0, indicators=indicators),
             format_ndx_grid_stopped(cycle, 23080.40, indicators=indicators),
+            format_ndx_grid_stop_loss(cycle, 20800.40, indicators=indicators),
             format_ndx_grid_closed(cycle_closed, 34760.30, indicators=indicators),
             format_ndx_grid_manual_close(actual_cycle, 28920.50, indicators=indicators),
             format_ndx_grid_data_stale("2026-09-03"),

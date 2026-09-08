@@ -60,8 +60,21 @@ stateDiagram-v2
 - **监控频率**：APScheduler 每 **5 分钟** 轮询一次 NDX 最新价格。
 - **边界判定规则**：
   - `current_price >= actual_upper_price` $\rightarrow$ **CLOSED** (原因: `UPPER_REACHED`)
-  - `current_price < actual_lower_price` $\rightarrow$ **STOPPED** (原因: `LOWER_BREACHED`)
+  - `current_price <= actual_lower_price` $\rightarrow$ **STOPPED** (原因: `LOWER_BREACHED`)
 - **理论网格状态计算**：根据当前价格在网格区间内的相对位置，计算理论当前网格层级（`grid_interval_index`）与理论持仓比例（`position_ratio`），仅用于 Daily Report 和 Dashboard 提醒展示。
+
+### 6. 止损提醒 (STOP_LOSS, 跌破下轨后继续下跌)
+STOPPED **不等于已止损**。Grid 跌破 Lower 后进入**风险观察阶段**，此时系统持续观察：
+
+```text
+NDX > Lower              → Grid 正常运行 (RUNNING)
+NDX <= Lower             → RUNNING → STOPPED (进入风险观察, 发送 NDX_GRID_STOPPED)
+NDX <= Lower × (1 - pct) → 发送 NDX_GRID_STOP_LOSS 止损提醒 (默认 pct = 0.10, 即 Lower × 0.90)
+```
+
+- **止损提醒线** = `Lower × (1 - DEFAULT_GRID_STOP_LOSS_AFTER_LOWER_PCT)`（百分比相对 **Lower**，而非 Base；例：Base 30,000 / Lower 25,500 / 止损提醒线 22,950）。
+- **cycle 级去重**：同一 Grid Cycle 只发送一次 STOP_LOSS（价格继续下跌不重复报警）；反弹不触发，也不自动恢复 RUNNING。
+- **不改变状态机**：STOP_LOSS 仅为独立通知事件，GridCycle 仍保持 `STOPPED`；系统不会自动平仓，也不会自动重建 Grid，新 Cycle 必须等待新的 Entry Signal。
 
 ---
 
@@ -69,13 +82,16 @@ stateDiagram-v2
 
 系统固定于美东时间交易日 **16:30** 执行每日汇报任务（`send_daily_report`）。支持两种模式：
 
+> [!NOTE]
+> **美国市场全天休市日（周末 / NYSE 节假日）不发送日报**。日报任务开始时复用 `trading_hours`（pandas-market-calendars / XNYS 日历）判断当天是否为有效交易日：休市日直接跳过（不生成、不发送、不消耗当天 dedup）；**提前收市日（如 Thanksgiving 次日、Christmas Eve）仍为有效交易日，照常发送日报**。
+
 ### 1. 汇报模式说明
 - **`off`**：关闭每日汇报推送。
 - **`ndx_grid`**（默认）：发送 **NDX Grid 专用日报**。包含：
   - NDX 现价、RSI14、SMA200、1 年前价格与数据状态（FRESH / STALE / UNAVAILABLE）
   - 开仓信号状态（YES / NO / NOT EVALUATED）
   - 当前策略参数（Upper/Lower 比例、Grid Count、Leverage）
-  - 活动网格周期状态（WAITING 建议参数 / RUNNING 实际参数与理论位置 / CLOSED / STOPPED 终止原因）
+  - 活动网格周期状态（WAITING 建议参数 / RUNNING 实际参数与理论位置 / STOPPED 风险观察与止损提醒线 / CLOSED 终止原因）
   - 明确标注“理论状态仅用于提醒”的免责声明
 
 > [!NOTE]
@@ -167,6 +183,7 @@ NDX Grid Alert/
 | **默认网格下限比例** | `DEFAULT_GRID_LOWER_PCT` | `0.20` | 建议网格 Lower 下浮比例 (-20%) |
 | **默认网格格数** | `DEFAULT_GRID_COUNT` | `200` | 建议等差网格分格数量 |
 | **默认网格杠杆** | `DEFAULT_GRID_LEVERAGE` | `5.0` | 建议网格杠杆倍数 |
+| **止损观察跌幅** | `DEFAULT_GRID_STOP_LOSS_AFTER_LOWER_PCT` | `0.10` | 跌破 Lower 后继续下跌该比例触发止损提醒（止损提醒线 = Lower × (1 - 该比例)） |
 | **每日汇报模式** | `DAILY_REPORT_MODE` | `"ndx_grid"` | 可选 `off` / `ndx_grid` |
 | **日志保留天数** | `ALERT_LOG_RETENTION_DAYS` | `90` | AlertLog 清理周期 |
 
@@ -230,14 +247,15 @@ docker compose ps
 python -m unittest discover tests -p "test_*.py"
 ```
 
-### 正式测试覆盖范围 (Phase 1–6)
+### 正式测试覆盖范围 (Phase 1–7)
 - `tests/test_ndx_phase1.py`：NDX 市场数据、网格数学与开仓信号测试
 - `tests/test_grid_cycle_phase2.py`：网格状态机流转测试
 - `tests/test_grid_phase3.py`：定时监控与 Fail-Closed 测试
 - `tests/test_grid_phase4a.py`：Grid REST API 接口测试
 - `tests/test_grid_phase4b.py`：Grid Admin UI 测试
 - `tests/test_grid_phase5.py`：并发、落盘恢复与安全加固测试
-- `tests/test_daily_report_phase6.py`：每日汇报测试
+- `tests/test_daily_report_phase6.py`：每日汇报测试（含休市日跳过 / STOPPED Grid 日报展示）
+- `tests/test_ndx_grid_stop_loss.py`：止损提醒测试（触发边界 / cycle 级去重 / 反弹 / 新 cycle / 配置 / 模板）
 
 ---
 
@@ -249,6 +267,7 @@ python -m unittest discover tests -p "test_*.py"
 - **Phase 5**: 生产环境加固。解决 SQLite 并发、Scheduler Session 隔离、Commit-Before-Notify 及重启状态恢复。
 - **Phase 6**: 可配置每日汇报系统。支持在 16:30 灵活切换 `off` / `ndx_grid` 模式。
 - **Phase 7**: 彻底移除旧版 QQQ / LEAPS 期权功能，项目正式转为 NDX Grid Only。
+- **Phase 8**: 新增跌破下轨后继续下跌的独立止损提醒（`NDX_GRID_STOP_LOSS`，cycle 级去重、可配置比例）；美国市场全天休市日自动跳过每日日报。
 
 ---
 

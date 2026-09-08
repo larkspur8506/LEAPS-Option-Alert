@@ -12,6 +12,9 @@ class AlertDeduplicator:
         # proximity 状态去重: 同一 Grid cycle 进入"接近入场区域"只提醒一次,
         # RSI 离开区域 (或 cycle 结束/手动 reset) 后才允许再次提醒。
         self.proximity_active: Dict[str, bool] = {}
+        # 止损提醒 (STOP_LOSS) cycle 级去重: 跌破 Lower 后继续下跌到止损提醒线,
+        # 同一 Grid cycle 只提醒一次; 新 cycle (新 id) 自然拥有新的去重 key。
+        self.stop_loss_alerted: Set[str] = set()
 
     def get_today_key(self) -> str:
         return datetime.now(et_tz).strftime("%Y-%m-%d")
@@ -89,10 +92,28 @@ class AlertDeduplicator:
     def is_proximity_active(self, cycle_key: str) -> bool:
         return bool(self.proximity_active.get(cycle_key))
 
+    def should_alert_stop_loss(self, cycle_key: str) -> bool:
+        """
+        止损提醒 (STOP_LOSS) 去重 (cycle 级, 非按日)。
+
+        规则: 同一 Grid cycle (按 cycle key) 只允许发送一次 STOP_LOSS 提醒;
+        即使价格继续下跌 (22,900 / 22,500 / 21,000 ...) 也不再重复推送。
+        新 Grid cycle 使用新的 cycle id 作为 key, 可以再次触发。
+        """
+        if cycle_key in self.stop_loss_alerted:
+            return False
+        self.stop_loss_alerted.add(cycle_key)
+        return True
+
+    def clear_stop_loss(self, cycle_key: str):
+        """清除指定 cycle 的 STOP_LOSS 去重状态 (仅测试/手动 reset 使用)"""
+        self.stop_loss_alerted.discard(cycle_key)
+
     def clear(self):
         self.daily_rules.clear()
         self.weekly_rules.clear()
         self.proximity_active.clear()
+        self.stop_loss_alerted.clear()
 
 
 _deduplicator = AlertDeduplicator()
@@ -119,6 +140,24 @@ def clear_proximity(cycle_key: str = PROXIMITY_KEY) -> None:
 
 def is_proximity_active(cycle_key: str = PROXIMITY_KEY) -> bool:
     return _deduplicator.is_proximity_active(cycle_key)
+
+
+# 止损提醒 (STOP_LOSS) 事件: cycle 级去重, 独立于按日/按周 key
+STOP_LOSS_KEY_PREFIX = "NDX_GRID_STOP_LOSS_cycle_"
+
+def stop_loss_cycle_key(cycle_id: int) -> str:
+    """STOP_LOSS 去重 key: 绑定 GridCycle id, 新 cycle 自动获得新 key"""
+    return f"{STOP_LOSS_KEY_PREFIX}{int(cycle_id)}"
+
+def should_alert_stop_loss(cycle_key: str) -> bool:
+    return _deduplicator.should_alert_stop_loss(cycle_key)
+
+def is_stop_loss_alerted(cycle_key: str) -> bool:
+    """查询指定 cycle 的 STOP_LOSS 提醒是否已发送 (日报展示用, 只读)"""
+    return cycle_key in _deduplicator.stop_loss_alerted
+
+def clear_stop_loss(cycle_key: str) -> None:
+    _deduplicator.clear_stop_loss(cycle_key)
 
 
 def reset_daily_dedup():

@@ -37,6 +37,19 @@ def has_running_grid_cycle(db: Session) -> bool:
     return get_running_grid_cycle(db) is not None
 
 
+def get_latest_stopped_grid_cycle(db: Session) -> Optional[GridCycle]:
+    """
+    获取最近一个 STOPPED 状态的网格周期 (如果有)。
+    仅用于 STOP_LOSS 风险观察 (跌破 Lower 后继续下跌的止损提醒), 只读, 不改状态。
+    """
+    return (
+        db.query(GridCycle)
+        .filter(GridCycle.status == "STOPPED")
+        .order_by(GridCycle.id.desc())
+        .first()
+    )
+
+
 def create_waiting_grid_cycle(
     db: Session,
     suggested_params: Dict[str, Any]

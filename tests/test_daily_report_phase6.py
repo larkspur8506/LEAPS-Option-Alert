@@ -79,6 +79,11 @@ class DailyReportTestBase(unittest.TestCase):
         self.mock_fetcher = MagicMock()
         self.mock_fetcher.get_ndx_data.return_value = make_ndx_data()
 
+        # 日报 job 的美国交易日检查默认视为交易日 (休市日行为在专门用例中单独覆盖)
+        self._trading_day_patch = patch("app.scheduler.jobs.is_trading_day", return_value=True)
+        self._trading_day_patch.start()
+        self.addCleanup(self._trading_day_patch.stop)
+
         # Configuration 行 (daily_report_mode 列)
         self.config_row = Configuration(
             admin_password_hash="x", daily_report_mode=None  # NULL -> ndx_grid 默认
@@ -102,6 +107,7 @@ class DailyReportTestBase(unittest.TestCase):
             "default_grid_lower_pct": 0.20,
             "default_grid_count": 200,
             "default_grid_leverage": 5.0,
+            "default_grid_stop_loss_after_lower_pct": 0.10,
         })
         return cfg
 
@@ -362,9 +368,42 @@ class TestNDXReportContent(DailyReportTestBase):
         self.assertIn("最近一轮：🟢 CLOSED（UPPER_REACHED）", msg)
 
     def test_12_stopped_report(self):
-        """12. STOPPED -> 最近一轮 STOPPED + 原因"""
-        msg = self._format(self._dashboard(), latest_cycle={"status": "STOPPED", "close_reason": "LOWER_BREACHED", "id": 2})
-        self.assertIn("最近一轮：🔴 STOPPED（LOWER_BREACHED）", msg)
+        """12. STOPPED -> 风险观察展示: 止损提醒线 + 实际参数 (不虚构)"""
+        latest = {
+            "id": 2, "status": "STOPPED", "close_reason": "LOWER_BREACHED",
+            "actual_base_price": 30000.0, "actual_upper_price": 34500.0,
+            "actual_lower_price": 25500.0, "actual_grid_count": 300,
+            "actual_leverage": 3.0,
+        }
+        msg = self._format(self._dashboard(), latest_cycle=latest)
+        self.assertIn("当前：🔴 STOPPED / 风险观察", msg)
+        self.assertIn("止损提醒线：22,950.00", msg)  # 25500 × (1 - 0.10)
+        self.assertIn("Base：30,000.00", msg)
+        self.assertIn("Upper：34,500.00", msg)
+        self.assertIn("Lower：25,500.00", msg)
+        self.assertIn("网格：300格", msg)
+        self.assertIn("杠杆：3.0x", msg)
+
+    def test_12b_stopped_report_stop_loss_triggered(self):
+        """12b. STOPPED + 已触发止损提醒 -> 明确显示 已触发止损提醒"""
+        latest = {
+            "id": 2, "status": "STOPPED", "close_reason": "LOWER_BREACHED",
+            "actual_base_price": 30000.0, "actual_upper_price": 34500.0,
+            "actual_lower_price": 25500.0, "actual_grid_count": 300,
+            "actual_leverage": 3.0,
+        }
+        notifier = WeChatNotifier("https://mock.webhook/key=SECRET")
+        report_data = {
+            "date": "2026-09-04",
+            "dashboard": self._dashboard(),
+            "latest_cycle": latest,
+            "stop_loss_alerted": True,
+            "strategy": {"upper_pct": 0.20, "lower_pct": 0.20, "grid_count": 200,
+                         "leverage": 5.0, "stop_loss_after_lower_pct": 0.10},
+        }
+        msg = notifier.format_ndx_grid_report(report_data)
+        self.assertIn("当前：🛑 STOPPED / 已触发止损提醒", msg)
+        self.assertIn("止损提醒线：22,950.00", msg)
 
     def test_14_stale_ndx_not_fake_signal(self):
         """14. NDX 数据 stale -> 数据状态：🟡 过期, 入场信号未评估 (不是 未触发)"""
@@ -602,6 +641,159 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
         # message 仍然是完整内容，不是空字符串
         stored = json.loads(log.message)
         self.assertGreater(len(stored["message"]), 50)
+
+
+class TestMarketClosedSkip(DailyReportTestBase):
+    """美国市场全天休市日 -> 跳过日报 (复用 NYSE 交易日历; 不消耗 dedup; 提前收市日照发)"""
+
+    def test_23_market_closed_skips_report(self):
+        """23. 休市日 (周末/节假日) -> 不生成、不发送日报, 不写 AlertLog"""
+        from app.database.models import AlertLog
+
+        self._clear_dedup()
+        notifier = MagicMock()
+        with patch("app.scheduler.jobs.is_trading_day", return_value=False), \
+             patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
+            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        self.assertEqual(res["status"], "SKIPPED")
+        self.assertEqual(res["reason"], "MARKET_CLOSED")
+        notifier.format_ndx_grid_report.assert_not_called()
+        notifier.send_ndx_grid_report.assert_not_called()
+        self.assertEqual(self.db.query(AlertLog).count(), 0)
+
+    def test_24_market_closed_does_not_consume_daily_dedup(self):
+        """24. 休市日跳过不消耗 DAILY_REPORT dedup: 下一个交易日仍能正常发送"""
+        self._clear_dedup()
+        notifier = MagicMock()
+        notifier.send_ndx_grid_report.return_value = True
+        notifier.format_ndx_grid_report.return_value = "mock ndx grid report"
+        with patch("app.scheduler.jobs.is_trading_day", return_value=False):
+            send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        with patch("app.scheduler.jobs.is_trading_day", return_value=True), \
+             patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
+            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        self.assertEqual(res["status"], "OK")
+        notifier.send_ndx_grid_report.assert_called_once()
+
+    def test_25_early_close_day_still_sends_report(self):
+        """25. 提前收市日仍为有效交易日 -> 正常发送日报 (只判断交易日, 不判断时段)"""
+        self._clear_dedup()
+        notifier = MagicMock()
+        notifier.send_ndx_grid_report.return_value = True
+        notifier.format_ndx_grid_report.return_value = "mock ndx grid report"
+        with patch("app.scheduler.jobs.is_trading_day", return_value=True), \
+             patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
+            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        self.assertEqual(res["status"], "OK")
+        notifier.send_ndx_grid_report.assert_called_once()
+
+
+class TestTradingDayCalendar(unittest.TestCase):
+    """is_trading_day 复用 pandas-market-calendars (XNYS) 真实日历: 周末/全天休市/提前收市"""
+
+    def test_weekend_is_not_trading_day(self):
+        from app.scheduler.trading_hours import is_trading_day
+        self.assertFalse(is_trading_day(datetime(2026, 9, 5, 12, 0, tzinfo=et_tz)))   # 周六
+        self.assertFalse(is_trading_day(datetime(2026, 9, 6, 12, 0, tzinfo=et_tz)))   # 周日
+
+    def test_full_holiday_is_not_trading_day(self):
+        from app.scheduler.trading_hours import is_trading_day
+        # Labor Day 2026-09-07 / Independence Day observed 2026-07-03 / Thanksgiving 2026-11-26
+        self.assertFalse(is_trading_day(datetime(2026, 9, 7, 12, 0, tzinfo=et_tz)))
+        self.assertFalse(is_trading_day(datetime(2026, 7, 3, 12, 0, tzinfo=et_tz)))
+        self.assertFalse(is_trading_day(datetime(2026, 11, 26, 12, 0, tzinfo=et_tz)))
+
+    def test_early_close_day_is_trading_day(self):
+        from app.scheduler.trading_hours import is_trading_day
+        # 2026-11-27 (Thanksgiving 次日) 与 2026-12-24 (Christmas Eve) 均为提前收市日
+        self.assertTrue(is_trading_day(datetime(2026, 11, 27, 12, 0, tzinfo=et_tz)))
+        self.assertTrue(is_trading_day(datetime(2026, 12, 24, 12, 0, tzinfo=et_tz)))
+
+    def test_normal_trading_day_is_trading_day(self):
+        from app.scheduler.trading_hours import is_trading_day
+        self.assertTrue(is_trading_day(datetime(2026, 9, 8, 12, 0, tzinfo=et_tz)))
+
+
+class TestStoppedGridDailyReport(DailyReportTestBase):
+    """STOPPED Grid 日报: 风险观察 / 已触发止损提醒 (jobs 全链路, 含 dedup 状态)"""
+
+    STOPPED_SUGGESTED = {
+        "base_price": 30000.0, "upper_price": 34500.0, "lower_price": 25500.0,
+        "grid_count": 300, "leverage": 3.0,
+    }
+    STOPPED_ACTUAL = {
+        "actual_base_price": 30000.0, "actual_upper_price": 34500.0,
+        "actual_lower_price": 25500.0, "actual_grid_count": 300,
+        "actual_leverage": 3.0, "actual_margin": 1000.0,
+    }
+
+    def _make_stopped_cycle(self, mark_stop_loss: bool):
+        from app.alerts.grid_cycle import stop_grid_cycle
+        from app.alerts import dedup
+
+        cycle = create_waiting_grid_cycle(self.db, dict(self.STOPPED_SUGGESTED))
+        grid_service.start_cycle(self.db, cycle.id, dict(self.STOPPED_ACTUAL))
+        stop_grid_cycle(self.db, cycle.id, reason="LOWER_BREACHED")
+        if mark_stop_loss:
+            dedup.should_alert_stop_loss(dedup.stop_loss_cycle_key(cycle.id))
+        return cycle
+
+    def _run_report(self):
+        captured = {}
+        notifier = WeChatNotifier("https://mock.webhook/key=SECRET")
+        notifier._send_message = lambda msg: (captured.__setitem__("msg", msg) or True)
+        with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
+            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=self._config("ndx_grid"))
+        return res, captured.get("msg", "")
+
+    def test_26_stopped_grid_report_shows_risk_watch(self):
+        """26. STOPPED Grid 日报: 风险观察 + 止损提醒线 + 实际参数"""
+        self._clear_dedup()
+        cycle = self._make_stopped_cycle(mark_stop_loss=False)
+        res, msg = self._run_report()
+        self.assertEqual(res["status"], "OK")
+        self.assertIn("当前：🔴 STOPPED / 风险观察", msg)
+        self.assertIn("止损提醒线：22,950.00", msg)  # 25500 × (1 - 0.10)
+        self.assertIn("Base：30,000.00", msg)
+        self.assertIn("Upper：34,500.00", msg)
+        self.assertIn("Lower：25,500.00", msg)
+        self.assertIn("网格：300格", msg)
+        self.assertIn("杠杆：3.0x", msg)
+
+    def test_27_triggered_stop_loss_report(self):
+        """27. 已触发止损提醒 -> 日报明确显示 已触发止损提醒"""
+        self._clear_dedup()
+        cycle = self._make_stopped_cycle(mark_stop_loss=True)
+        res, msg = self._run_report()
+        self.assertEqual(res["status"], "OK")
+        self.assertIn("当前：🛑 STOPPED / 已触发止损提醒", msg)
+        self.assertIn("止损提醒线：22,950.00", msg)
+
+    def test_28_no_active_grid_defaults_rendered(self):
+        """28. 无 Active Grid -> 显示运行时配置默认 (±15% / 300格 / 3.0x)"""
+        from app.config import Config
+
+        self._clear_dedup()
+        cfg = Config({
+            "daily_report_mode": "ndx_grid",
+            "wechat_webhook_url": "https://mock.webhook/key=SECRET",
+            "default_grid_upper_pct": 0.15,
+            "default_grid_lower_pct": 0.15,
+            "default_grid_count": 300,
+            "default_grid_leverage": 3.0,
+            "default_grid_stop_loss_after_lower_pct": 0.10,
+        })
+        captured = {}
+        notifier = WeChatNotifier("https://mock.webhook/key=SECRET")
+        notifier._send_message = lambda msg: (captured.__setitem__("msg", msg) or True)
+        with patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
+            res = send_daily_report_job(self.mock_fetcher, db=self.db, config=cfg)
+        self.assertEqual(res["status"], "OK")
+        msg = captured.get("msg", "")
+        self.assertIn("当前：⚪ 无运行中的 Grid", msg)
+        self.assertIn("默认区间：±15%", msg)
+        self.assertIn("网格：300格", msg)
+        self.assertIn("杠杆：3.0x", msg)
 
 
 if __name__ == "__main__":

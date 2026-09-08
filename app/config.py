@@ -45,6 +45,16 @@ class Config:
             return float(self._db_config["default_grid_leverage"])
         return float(os.getenv("DEFAULT_GRID_LEVERAGE", "5.0"))
 
+    def get_default_grid_stop_loss_after_lower_pct(self) -> float:
+        """
+        Grid Lower 被跌破后, 再向下多少比例触发止损提醒。
+        仅用于 NDX_GRID_STOP_LOSS 通知事件, 不影响 Grid 状态机 (STOPPED 语义不变)。
+        计算公式: stop_loss_alert_price = lower_price * (1 - pct)
+        """
+        if self._db_config.get("default_grid_stop_loss_after_lower_pct") is not None:
+            return float(self._db_config["default_grid_stop_loss_after_lower_pct"])
+        return float(os.getenv("DEFAULT_GRID_STOP_LOSS_AFTER_LOWER_PCT", "0.10"))
+
     # 每日 16:30 日报模式
     DAILY_REPORT_MODES = ("off", "ndx_grid")
 
