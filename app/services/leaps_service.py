@@ -197,6 +197,14 @@ def close_position(db: Session, position_id: int, reason: str,
 # TTL / 聚合视图
 # ---------------------------------------------------------------------------
 
+def cfg_waiting_ttl(db: Session) -> int:
+    """从运行时配置读 WAITING TTL (失败回退默认 3)。"""
+    try:
+        from app.config import load_config_from_db
+        return int(load_config_from_db(db).get_waiting_ttl_trading_days())
+    except Exception:
+        return 3
+
 def _count_trading_days_between(start_et: datetime, end_et: datetime) -> Optional[int]:
     try:
         from app.scheduler.trading_hours import count_trading_days
@@ -281,9 +289,39 @@ def get_leaps_dashboard(db: Session, qqq_data: Optional[Dict[str, Any]]) -> Dict
     for k in _QQQ_KEYS:
         qqq.setdefault(k, None)
 
-    return {
+    dashboard = {
         "qqq": qqq,
-        "waiting_position": _ser(waiting) if waiting else None,
+        "waiting_position": _ser(waiting, ttl_cfg=cfg_waiting_ttl(db)) if waiting else None,
         "holding_position": _ser(holding) if holding else None,
         "latest_position": _ser(latest) if latest else None,
     }
+
+    # HOLDING 附加持仓评估摘要 (只读; 失败不阻塞 dashboard)
+    if holding is not None:
+        try:
+            from app.alerts.qqq_rules import evaluate_position, _trading_days_held
+            from app.config import load_config_from_db
+
+            cfg = load_config_from_db(db)
+            summary: Dict[str, Any] = {}
+            today = date.today()
+            summary["holding_days"] = _trading_days_held(holding.entry_date, today)
+            if holding.expiration_date:
+                summary["dte"] = (holding.expiration_date - today).days
+            if qqq.get("closed_price") and cfg:
+                levels = cfg.get_add_levels()
+                add_count = int(holding.add_count or 0)
+                if holding.quantity and holding.quantity < cfg.get_max_quantity() and add_count < len(levels):
+                    base = holding.signal_base_price
+                    cur = qqq["closed_price"]
+                    if base:
+                        next_level = levels[add_count]
+                        trigger_at = base * (1 - next_level)
+                        summary["next_add_level_pct"] = next_level
+                        summary["next_add_trigger_price"] = trigger_at
+                        summary["next_add_distance_pct"] = (cur / trigger_at - 1) * 100.0
+            dashboard["holding_summary"] = summary
+        except Exception as e:
+            logger.debug(f"[LEAPS Service] holding summary skipped: {e}")
+
+    return dashboard

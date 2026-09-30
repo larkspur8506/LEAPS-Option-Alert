@@ -144,6 +144,12 @@ def get_status(request: Request, db: Session = Depends(get_db)):
         qqq_data = DataFetcher().get_qqq_data()
     except Exception:
         qqq_data = None
+    if isinstance(qqq_data, dict):
+        from app.alerts.leaps_monitor import _is_data_fresh
+        try:
+            qqq_data["is_data_fresh"] = _is_data_fresh(qqq_data)
+        except Exception:
+            qqq_data["is_data_fresh"] = False
     return leaps_service.get_leaps_dashboard(db, qqq_data)
 
 

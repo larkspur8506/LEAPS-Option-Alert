@@ -418,7 +418,7 @@ def format_leaps_daily_report(data: Dict, now: Optional[datetime] = None) -> str
         f"高于一年前：{'✓' if y1y_ok else '✗'}",
     ]
 
-    # 仓位状态
+    # 仓位状态 (含距离信息: 距止盈 RSI / 距下一加仓档 / 持仓天数与 DTE / WAITING TTL)
     lines += ["", "📐 仓位状态"]
     if holding:
         pnl_text = "N/A"
@@ -431,15 +431,45 @@ def format_leaps_daily_report(data: Dict, now: Optional[datetime] = None) -> str
             f"张数：{_fmt_num(holding.get('quantity'), 0)} (加仓 {holding.get('add_count', 0)} 次)",
             f"PnL：{pnl_text}",
         ]
+        summary = data.get("dashboard", {}).get("holding_summary") or {}
+        hd = summary.get("holding_days")
+        if _is_num(hd):
+            ts_days = strategy.get("time_stop_days")
+            ts_text = f" / 止损 {ts_days} 交易日" if _is_num(ts_days) else ""
+            lines.append(f"已持仓：{int(hd)} 个交易日{ts_text}")
+        dte = summary.get("dte")
+        if _is_num(dte):
+            dte_force = strategy.get("dte_force_days")
+            dte_text = f" (强制平仓线 {dte_force} 天)" if _is_num(dte_force) else ""
+            lines.append(f"距到期：{int(dte)} 天{dte_text}")
+        # 距下一加仓档
+        if _is_num(rsi) and _is_num(tp_rsi):
+            rsi_room = rsi - tp_rsi
+            lines.append(f"距止盈：RSI 还差 {rsi_room:.2f} (阈值 > {_fmt_num(tp_rsi, 0)})")
+        nxt_pct = summary.get("next_add_level_pct")
+        nxt_dist = summary.get("next_add_distance_pct")
+        if _is_num(nxt_pct) and _is_num(nxt_dist) and nxt_dist > 0:
+            lines.append(
+                f"距加仓：下一档 -{_fmt_pct_compact(nxt_pct)}, "
+                f"现价高 {nxt_dist:.2f}% (触发价 {_fmt_price(summary.get('next_add_trigger_price'))})"
+            )
+        elif _is_num(nxt_pct) and _is_num(nxt_dist):
+            lines.append("距加仓：已处于/穿过下一档位 (待 RSI 条件确认)")
     elif waiting:
         lines.append(f"当前：🟡 WAITING — 等待确认建仓 (#{waiting.get('id')})")
+        ttl = waiting.get("ttl") or {}
+        if ttl.get("ttl_enabled") and _is_num(ttl.get("remaining_trading_days")):
+            lines.append(
+                f"建议有效期：剩 {int(ttl['remaining_trading_days'])} 个交易日 "
+                f"(共 {ttl.get('ttl_trading_days')})"
+            )
     else:
         if latest and latest.get("status") in ("CLOSED", "DISMISSED", "EXPIRED"):
             reason = f"（{latest.get('close_reason')}）" if latest.get("close_reason") else ""
             lines.append(f"当前：⚪ 无持仓 · 最近记录 #{latest.get('id')} {latest.get('status')}{reason}")
         else:
             lines.append("当前：⚪ 无持仓")
-    if _is_num(tp_rsi):
+    if _is_num(tp_rsi) and not holding:
         lines.append(f"止盈线：RSI > {_fmt_num(tp_rsi, 0)}")
 
     # 市场状态

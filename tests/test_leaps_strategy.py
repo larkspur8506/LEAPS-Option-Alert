@@ -22,14 +22,22 @@ from tests.support import login_client  # noqa: E402
 
 
 def _make_qqq(**overrides):
-    """构造一份"有效且新鲜"的 QQQ 数据 (默认全部条件满足入场)。"""
+    """构造一份"有效且新鲜"的 QQQ 数据 (默认全部条件满足入场)。
+
+    data_timestamp 动态取最近一个交易日 (周一/周末回退), 保证 _is_data_fresh 不随真实日期漂移。
+    """
+    from app.scheduler.trading_hours import get_latest_trading_day
+    try:
+        ts = str(get_latest_trading_day())
+    except Exception:
+        ts = datetime.now().strftime("%Y-%m-%d")
     base = {
         "ticker": "QQQ",
         "is_data_valid": True,
         "is_data_fresh": True,
         "last_price": 480.0,
         "prev_close": 475.0,
-        "data_timestamp": "2026-09-29 00:00:00-04:00",
+        "data_timestamp": f"{ts} 00:00:00-04:00",
         "rsi": 30.0,
         "ma200": 450.0,
         "is_above_sma200_3d": True,
@@ -457,6 +465,42 @@ class LeapsEndToEndTest(unittest.TestCase):
         held = self.db.query(OptionPosition).filter(OptionPosition.id == rec.id).first()
         self.assertEqual(held.status, "CLOSED")
 
+    def test_9_dashboard_fresh_flag_injected(self):
+        """P1 回归: 新鲜度由聚合层/监控判定注入后, 新鲜数据走正常信号路径 (不再恒 stale)"""
+        from unittest.mock import patch
+        from app.alerts.leaps_monitor import process_leaps_position, _is_data_fresh
+        from app.services import leaps_service
+
+        # 监控同款判定对当日数据返回 True (日报聚合层用的同一口径)
+        self.assertTrue(_is_data_fresh(_make_qqq()))
+        with patch("app.alerts.leaps_monitor._is_data_fresh", return_value=True):
+            out = process_leaps_position(self.db, _make_qqq(), notifier=None,
+                                         config=_FakeConfig())
+        self.assertIn(out["action"], ("ENTRY_SIGNAL", "WAITING_QUEUED"))
+        dash = leaps_service.get_leaps_dashboard(self.db, _make_qqq())
+        self.assertIsNotNone(dash["waiting_position"])
+
+    def test_10_dashboard_aggregates_holding_summary(self):
+        """P2/P3: get_leaps_dashboard 为 HOLDING 附加持仓评估摘要"""
+        from app.services import leaps_service
+        from app.alerts.qqq_rules import check_entry_signal
+
+        sig = check_entry_signal(_make_qqq())
+        rec = leaps_service.create_waiting_position(self.db, sig, _FakeConfig())
+        leaps_service.confirm_entry(
+            self.db, rec.id, strike=450.0,
+            expiration=date.today() + timedelta(days=700),
+            entry_price=100.0, quantity=1,
+        )
+        dash = leaps_service.get_leaps_dashboard(self.db, _make_qqq())
+        s = dash.get("holding_summary") or {}
+        self.assertIn("holding_days", s)
+        self.assertIn("dte", s)
+        self.assertAlmostEqual(s["dte"], 700, delta=2)
+        # qty=1 < max 3, add_count=0 < len(levels): 下一档信息应存在
+        self.assertAlmostEqual(s["next_add_level_pct"], 0.10)
+        self.assertAlmostEqual(s["next_add_trigger_price"], 480.0 * 0.9, places=2)
+
 
 # ===========================================================================
 # 7. 通知格式化
@@ -525,10 +569,42 @@ class TestNotificationFormat(unittest.TestCase):
             "breadth": {"sp500": {"price": 6000.0, "change_pct": 0.5},
                         "vix": {"price": 15.0, "change_pct": -2.0}},
         }
+        data["dashboard"]["holding_summary"] = {
+            "holding_days": 45, "dte": 655,
+            "next_add_level_pct": 0.10,
+            "next_add_trigger_price": 432.0,
+            "next_add_distance_pct": 11.18,
+        }
         msg = format_leaps_daily_report(data)
         self.assertIn("HOLDING", msg)
         self.assertIn("标普500", msg)
         self.assertIn("VIX", msg)
+        # P2/P3: 距离信息与持仓天数
+        self.assertIn("已持仓：45 个交易日", msg)
+        self.assertIn("距止盈", msg)
+        self.assertIn("距加仓：下一档 -10%", msg)
+        self.assertIn("距到期：655 天", msg)
+
+    def test_4b_daily_report_waiting_shows_ttl(self):
+        """P2: WAITING 时日报展示建议有效期 (TTL)"""
+        from app.notification.wechat import format_leaps_daily_report
+
+        data = {
+            "dashboard": {
+                "qqq": _make_qqq(),
+                "holding_position": None,
+                "waiting_position": {
+                    "id": 7, "status": "WAITING",
+                    "ttl": {"ttl_enabled": True, "ttl_trading_days": 3,
+                            "remaining_trading_days": 2, "expired": False},
+                },
+            },
+            "strategy": {"entry_rsi": 35.0, "tp_rsi": 65.0},
+        }
+        msg = format_leaps_daily_report(data)
+        self.assertIn("WAITING", msg)
+        self.assertIn("剩 2 个交易日", msg)
+
 
 
 if __name__ == "__main__":
