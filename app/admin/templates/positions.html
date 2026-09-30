@@ -1,0 +1,390 @@
+{% extends "base.html" %}
+
+{% block title %}LEAPS 持仓管理{% endblock %}
+
+{% block content %}
+{% set waiting = leaps_dash.waiting_position %}
+{% set holding = leaps_dash.holding_position %}
+{% set qqq = leaps_dash.qqq or {} %}
+
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
+        <div>
+            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">LEAPS 持仓管理</h1>
+            <p class="text-sm text-gray-500 mt-1">信号建议 → 券商手动买入 → 后台确认建仓 → 持仓监控 → 平仓归档</p>
+        </div>
+        <div class="flex gap-3 w-full sm:w-auto">
+            <a href="/admin"
+                class="flex-1 sm:flex-none bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-5 py-2.5 rounded-xl text-sm font-medium shadow-sm transition-all text-center">
+                Dashboard
+            </a>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="hidden fixed top-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-medium max-w-lg"></div>
+
+    <!-- 状态横幅 -->
+    {% if holding %}
+    <div class="mb-8 p-5 rounded-2xl border bg-green-50 border-green-200 flex flex-col sm:flex-row sm:items-center gap-3 justify-between shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+        <div class="flex items-center gap-3">
+            <span class="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span>
+            <span class="text-lg font-bold tracking-wide text-green-700">HOLDING — LEAPS 持仓中</span>
+        </div>
+        <span class="text-xs text-gray-500">Position #{{ holding.id }} · {{ holding.quantity }} 张 · 建仓 {{ holding.entry_date or "-" }}</span>
+    </div>
+    {% elif waiting %}
+    <div class="mb-8 p-5 rounded-2xl border bg-amber-50 border-amber-200 flex flex-col sm:flex-row sm:items-center gap-3 justify-between shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+        <div class="flex items-center gap-3">
+            <span class="w-3 h-3 rounded-full bg-amber-500 animate-pulse"></span>
+            <span class="text-lg font-bold tracking-wide text-amber-700">WAITING — 入场信号已触发</span>
+        </div>
+        <span class="text-xs text-gray-500">Position #{{ waiting.id }} · 创建: {{ waiting.created_at or "-" }}</span>
+    </div>
+    {% else %}
+    <div class="mb-8 p-5 rounded-2xl border bg-gray-50 border-gray-200 flex items-center gap-3 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+        <span class="w-3 h-3 rounded-full bg-gray-400"></span>
+        <span class="text-lg font-bold tracking-wide text-gray-500">NO ACTIVE POSITION</span>
+    </div>
+    {% endif %}
+
+    <!-- QQQ 市场信息 -->
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+        <div class="bg-white p-5 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
+            <h3 class="text-xs font-medium text-gray-500 mb-1 uppercase tracking-wider">QQQ 现价</h3>
+            <p class="text-xl font-bold text-gray-900" id="v-qqq-price">{{ "%.2f"|format(qqq.last_price) if qqq.last_price is not none else "-" }}</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
+            <h3 class="text-xs font-medium text-gray-500 mb-1 uppercase tracking-wider">RSI (14)</h3>
+            <p class="text-xl font-bold text-gray-900" id="v-qqq-rsi">{{ "%.2f"|format(qqq.rsi) if qqq.rsi is not none else "-" }}</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
+            <h3 class="text-xs font-medium text-gray-500 mb-1 uppercase tracking-wider">SMA200</h3>
+            <p class="text-xl font-bold text-gray-900" id="v-qqq-sma">{{ "%.2f"|format(qqq.ma200) if qqq.ma200 is not none else "-" }}</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
+            <h3 class="text-xs font-medium text-gray-500 mb-1 uppercase tracking-wider">一年前价格</h3>
+            <p class="text-xl font-bold text-gray-900" id="v-qqq-1y">{{ "%.2f"|format(qqq.price_1y_ago) if qqq.price_1y_ago is not none else "-" }}</p>
+        </div>
+        <div class="bg-white p-5 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
+            <h3 class="text-xs font-medium text-gray-500 mb-1 uppercase tracking-wider">入场信号</h3>
+            {% if qqq.entry_signal is none %}
+            <p class="text-sm font-bold mt-1 text-gray-400">数据不足</p>
+            {% elif qqq.entry_signal %}
+            <p class="text-sm font-bold mt-1 text-green-700">信号满足</p>
+            {% else %}
+            <p class="text-sm font-bold mt-1 text-gray-400">未满足</p>
+            {% endif %}
+        </div>
+        <div class="bg-white p-5 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
+            <h3 class="text-xs font-medium text-gray-500 mb-1 uppercase tracking-wider">数据状态</h3>
+            {% if qqq.is_data_fresh %}
+            <p class="text-sm font-bold mt-1 text-green-700">Fresh ✓</p>
+            {% else %}
+            <p class="text-sm font-bold mt-1 text-red-600">Stale ⚠</p>
+            {% endif %}
+            <p class="text-[10px] text-gray-400 mt-1 truncate">{{ qqq.data_timestamp[:19].replace("T", " ") if qqq.data_timestamp else "-" }}</p>
+        </div>
+    </div>
+
+    <!-- WAITING 建议 -->
+    {% if waiting %}
+    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden mb-8">
+        <div class="px-6 py-4 border-b border-gray-50 bg-amber-50/60 flex justify-between items-center">
+            <h2 class="text-base font-semibold text-gray-900">建议合约 (系统建议)</h2>
+            <span class="text-xs text-amber-700 font-medium">请在券商实际买入后, 录入实际参数确认建仓</span>
+        </div>
+        <div class="p-6">
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">信号基准价</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(waiting.signal_base_price) if waiting.signal_base_price is not none else "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">触发 RSI</h3><p class="text-lg font-bold text-gray-900">{{ "%.1f"|format(waiting.signal_rsi) if waiting.signal_rsi is not none else "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">建议 Delta</h3><p class="text-lg font-bold text-blue-700">≈ {{ "%.2f"|format(waiting.suggested_delta) if waiting.suggested_delta is not none else "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">建议期限</h3><p class="text-lg font-bold text-blue-700">≈ {{ waiting.suggested_tenor_days }} 天</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">类型</h3><p class="text-lg font-bold text-gray-900">QQQ Call (LEAPS)</p></div>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-3">
+                <button onclick="openConfirmModal()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
+                    确认建仓 (录入实际合约参数)
+                </button>
+                <button onclick="dismissWaiting({{ waiting.id }})"
+                    class="bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-6 py-3 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
+                    忽略此建议
+                </button>
+                <p class="text-xs text-gray-400 self-center">
+                    系统不会自动下单, 不连接任何券商
+                    {% set ttl = leaps_dash.waiting_ttl %}
+                    {% if ttl and ttl.ttl_enabled %}
+                    <br>未确认将在 <span class="font-semibold text-amber-600">{{ ttl.remaining_trading_days }}</span> 个交易日后自动过期
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- HOLDING 持仓详情 -->
+    {% if holding %}
+    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden mb-8">
+        <div class="px-6 py-4 border-b border-gray-50 bg-green-50/60 flex justify-between items-center">
+            <h2 class="text-base font-semibold text-gray-900">当前持仓</h2>
+            <span class="text-xs text-green-700 font-medium">加仓/平仓请以券商实际成交为准</span>
+        </div>
+        <div class="p-6">
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">合约</h3><p class="text-lg font-bold text-gray-900">Call {{ "%.2f"|format(holding.strike) if holding.strike is not none else "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">到期日</h3><p class="text-lg font-bold text-gray-900">{{ holding.expiration_date or "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">张数</h3><p class="text-lg font-bold text-gray-900">{{ holding.quantity }} <span class="text-xs text-gray-400">(加仓 {{ holding.add_count }} 次)</span></p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">入场权利金</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(holding.entry_price) if holding.entry_price is not none else "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">累计成本</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(holding.total_cost) if holding.total_cost is not none else "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">最新权利金</h3><p class="text-lg font-bold text-blue-700">{{ "%.2f"|format(holding.current_premium) if holding.current_premium is not none else "-" }}</p></div>
+                <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">信号基准价</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(holding.signal_base_price) if holding.signal_base_price is not none else "-" }}</p></div>
+            </div>
+            <button onclick="openCloseModal()"
+                class="w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
+                平仓归档 (HOLDING → CLOSED)
+            </button>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if not waiting and not holding %}
+    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-10 text-center mb-8">
+        <svg class="w-12 h-12 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17V7m4 10V7m4 10V7M4 21h16a1 1 0 001-1V4a1 1 0 00-1-1H4a1 1 0 00-1 1v16a1 1 0 001 1z"></path>
+        </svg>
+        <h2 class="text-lg font-bold text-gray-900 mb-1">NO ACTIVE POSITION</h2>
+        <p class="text-sm text-gray-600 font-medium mb-3">当前没有 WAITING 或 HOLDING 状态的期权仓位。</p>
+        <p class="text-xs text-gray-500">满足入场条件 (RSI &lt; 35 + SMA200 三日上方 + 高于一年前) 后，系统会自动生成 WAITING 建议，届时这里会出现「确认建仓」按钮。</p>
+    </div>
+    {% endif %}
+
+    <!-- History -->
+    <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden">
+        <div class="px-6 py-4 border-b border-gray-50 bg-gray-50/50">
+            <h2 class="text-base font-semibold text-gray-900">仓位历史 (最近 20 条)</h2>
+        </div>
+        <div class="overflow-x-auto ios-scroll">
+            <table class="w-full min-w-[1100px]">
+                <thead>
+                    <tr class="bg-gray-50/80 border-b border-gray-100 text-left">
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">ID</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">状态</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">信号基准</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">行权价</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">到期日</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">张数</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">入场权利金</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">累计成本</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">平仓权利金</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">创建</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">关闭</th>
+                        <th class="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">关闭原因</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for p in history.positions %}
+                    <tr class="hover:bg-gray-50/60 transition-colors">
+                        <td class="px-4 py-3 text-sm text-gray-500 font-mono">{{ p.id }}</td>
+                        <td class="px-4 py-3 text-sm"><span class="px-2 py-0.5 rounded-full text-xs font-semibold {% if p.status == 'WAITING' %}bg-blue-100 text-blue-800{% elif p.status == 'HOLDING' %}bg-green-100 text-green-800{% elif p.status == 'CLOSED' %}bg-purple-100 text-purple-800{% else %}bg-gray-100 text-gray-800{% endif %}">{{ p.status }}</span></td>
+                        <td class="px-4 py-3 text-sm font-mono text-gray-700">{{ "%.2f"|format(p.signal_base_price) if p.signal_base_price is not none else "-" }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-gray-900 font-medium">{{ "%.2f"|format(p.strike) if p.strike is not none else "-" }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-gray-700">{{ p.expiration_date or "-" }}</td>
+                        <td class="px-4 py-3 text-sm text-gray-700">{{ p.quantity if p.quantity is not none else "-" }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-gray-700">{{ "%.2f"|format(p.entry_price) if p.entry_price is not none else "-" }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-gray-700">{{ "%.2f"|format(p.total_cost) if p.total_cost is not none else "-" }}</td>
+                        <td class="px-4 py-3 text-sm font-mono text-purple-700">{{ "%.2f"|format(p.close_premium) if p.close_premium is not none else "-" }}</td>
+                        <td class="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{{ p.created_at.replace("T", " ") if p.created_at else "-" }}</td>
+                        <td class="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{{ p.closed_at.replace("T", " ") if p.closed_at else "-" }}</td>
+                        <td class="px-4 py-3 text-xs {% if p.close_reason == 'RSI_TP' %}text-green-700{% elif p.close_reason in ('TIME_STOP', 'DTE_FORCE') %}text-red-700{% else %}text-gray-500{% endif %}">{{ p.close_reason or "-" }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="12" class="px-6 py-12 text-center text-gray-400 text-sm">暂无仓位历史记录</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 确认建仓弹窗 -->
+<div id="confirm-modal" class="hidden fixed inset-0 z-50 overflow-y-auto bg-black/40">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+            <div class="px-6 py-4 border-b border-gray-100">
+                <h3 class="text-lg font-bold text-gray-900">确认建仓</h3>
+                <p class="text-xs text-gray-500 mt-1">此操作用于记录您已在券商实际买入的合约参数。系统不会自动下单, 也未连接任何券商。</p>
+            </div>
+            <div class="p-6">
+                <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 mb-5">
+                    <h4 class="text-xs font-bold text-amber-700 uppercase tracking-wider mb-2">系统建议 (只读)</h4>
+                    <div class="grid grid-cols-3 gap-2 text-xs text-gray-700">
+                        <div>Delta: <span class="font-bold font-mono">≈ {{ "%.2f"|format(waiting.suggested_delta) if waiting and waiting.suggested_delta is not none else "-" }}</span></div>
+                        <div>期限: <span class="font-bold font-mono">≈ {{ waiting.suggested_tenor_days if waiting else "-" }} 天</span></div>
+                        <div>信号基准: <span class="font-bold font-mono">{{ "%.2f"|format(waiting.signal_base_price) if waiting and waiting.signal_base_price is not none else "-" }}</span></div>
+                    </div>
+                </div>
+                <div class="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                    <h4 class="text-xs font-bold text-blue-700 uppercase tracking-wider mb-3">实际建仓参数 (以券商实际成交为准)</h4>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div><label class="block text-xs font-medium text-gray-500 mb-1">行权价 Strike</label><input id="cm-strike" type="number" step="0.01" required class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"></div>
+                        <div><label class="block text-xs font-medium text-gray-500 mb-1">到期日 (YYYY-MM-DD)</label><input id="cm-exp" type="date" required class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"></div>
+                        <div><label class="block text-xs font-medium text-gray-500 mb-1">每张权利金</label><input id="cm-premium" type="number" step="0.01" required placeholder="成交权利金 / 张" class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"></div>
+                        <div><label class="block text-xs font-medium text-gray-500 mb-1">张数</label><input id="cm-qty" type="number" step="1" value="1" required class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-4 bg-gray-50 flex justify-end gap-3">
+                <button onclick="closeConfirmModal()" class="bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 px-5 py-2.5 rounded-xl text-sm font-medium transition-all">取消</button>
+                <button id="cm-submit" onclick="submitConfirm({{ waiting.id if waiting else 'null' }})" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all">确认建仓 (WAITING → HOLDING)</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 平仓弹窗 -->
+<div id="close-modal" class="hidden fixed inset-0 z-50 overflow-y-auto bg-black/40">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <h3 class="text-lg font-bold text-gray-900 mb-2">确认平仓归档</h3>
+            <p class="text-sm text-gray-600 mb-4">确定要将该仓位标记为 CLOSED 吗?<br><span class="text-xs text-gray-400">此操作不会操作券商, 只会记录系统中的仓位状态。</span></p>
+            <label class="block text-xs font-medium text-gray-500 mb-1">平仓权利金 / 张 (可选记录)</label>
+            <input id="cl-premium" type="number" step="0.01" placeholder="留空则不记录" class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 mb-6 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+            <div class="flex justify-end gap-3">
+                <button onclick="closeCloseModal()" class="bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 px-5 py-2.5 rounded-xl text-sm font-medium transition-all">取消</button>
+                <button id="cl-submit" onclick="submitClose({{ holding.id if holding else 'null' }})" class="bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all">确认平仓 (HOLDING → CLOSED)</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ============================================================
+    // 纯展示层: 只负责数值格式化与 API 调用。
+    // 不实现信号判断/退出规则/状态机。
+    // 状态变更通过整页刷新交回服务端渲染, 保证单一渲染路径。
+    // ============================================================
+    const $ = id => document.getElementById(id);
+
+    function showToast(msg, type) {
+        const t = $("toast");
+        t.textContent = msg;
+        t.className = "fixed top-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-xl shadow-lg text-sm font-medium max-w-lg " +
+            (type === "error" ? "bg-red-600 text-white" : "bg-gray-900 text-white");
+        clearTimeout(t._timer);
+        t._timer = setTimeout(() => t.classList.add("hidden"), 4000);
+    }
+
+    async function apiFetch(url, options) {
+        const res = await fetch(url, options || {});
+        if (res.status === 401) { showToast("登录状态已失效，请重新登录。", "error"); setTimeout(() => location.href = "/admin/login", 1500); throw new Error("401"); }
+        if (res.status === 404) { showToast("仓位不存在。", "error"); throw new Error("404"); }
+        if (res.status === 409) {
+            const body = await res.json().catch(() => ({}));
+            showToast(body.detail || "当前仓位状态已发生变化，请刷新页面。", "error");
+            throw new Error("409");
+        }
+        if (res.status === 400 || res.status === 422) {
+            const body = await res.json().catch(() => ({}));
+            const detail = body.detail;
+            const msg = typeof detail === "string" ? detail
+                : Array.isArray(detail) ? detail.map(d => (d.loc ? d.loc.join(".") + ": " : "") + d.msg).join("; ")
+                : "参数错误";
+            showToast(msg, "error");
+            throw new Error(String(res.status));
+        }
+        if (res.status >= 500) { showToast("服务器发生错误，请稍后重试。", "error"); throw new Error("5xx"); }
+        return res;
+    }
+
+    // ---- 确认建仓弹窗 ----
+    function openConfirmModal() { $("confirm-modal").classList.remove("hidden"); }
+    function closeConfirmModal() { $("confirm-modal").classList.add("hidden"); }
+
+    async function submitConfirm(positionId) {
+        if (!positionId) { showToast("当前没有 WAITING 建议", "error"); return; }
+
+        const rawStrike = $("cm-strike").value.trim();
+        const rawExp = $("cm-exp").value.trim();
+        const rawPremium = $("cm-premium").value.trim();
+        const rawQty = $("cm-qty").value.trim();
+
+        if (!rawStrike || !rawExp || !rawPremium || !rawQty) {
+            showToast("请完整填写全部实际参数", "error");
+            return;
+        }
+
+        const strike = parseFloat(rawStrike);
+        const premium = parseFloat(rawPremium);
+        const qty = parseInt(rawQty, 10);
+
+        if (!Number.isFinite(strike) || !Number.isFinite(premium) || !/^\d+$/.test(rawQty) || qty < 1) {
+            showToast("参数包含非数字或无效数值", "error");
+            return;
+        }
+        if (strike <= 0 || premium <= 0) {
+            showToast("行权价与权利金必须大于 0", "error");
+            return;
+        }
+
+        const payload = {
+            strike: strike,
+            expiration_date: rawExp,
+            entry_price: premium,
+            quantity: qty
+        };
+
+        if (!confirm("确认建仓?\n\n提交的是您在券商实际买入的合约参数。\n系统不会自动下单, 也未连接任何券商。")) return;
+        const btn = $("cm-submit");
+        btn.disabled = true; btn.classList.add("opacity-50");
+        try {
+            const res = await apiFetch(`/api/leaps/${positionId}/confirm`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) location.reload();
+        } catch (e) { /* apiFetch 已提示 */ }
+        finally { btn.disabled = false; btn.classList.remove("opacity-50"); }
+    }
+
+    // ---- 平仓弹窗 ----
+    function openCloseModal() { $("close-modal").classList.remove("hidden"); }
+    function closeCloseModal() { $("close-modal").classList.add("hidden"); }
+
+    async function submitClose(positionId) {
+        if (!positionId) { showToast("当前没有 HOLDING 仓位", "error"); return; }
+        if (!confirm("确定要将该仓位标记为 CLOSED?\n此操作不会操作券商, 只会记录系统中的仓位状态。")) return;
+        const rawPremium = $("cl-premium").value.trim();
+        const payload = {};
+        if (rawPremium) {
+            const v = parseFloat(rawPremium);
+            if (!Number.isFinite(v) || v <= 0) { showToast("平仓权利金必须为正数或留空", "error"); return; }
+            payload.close_premium = v;
+        }
+        const btn = $("cl-submit");
+        btn.disabled = true; btn.classList.add("opacity-50");
+        try {
+            const res = await apiFetch(`/api/leaps/${positionId}/close`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) location.reload();
+        } catch (e) { /* apiFetch 已提示 */ }
+        finally { btn.disabled = false; btn.classList.remove("opacity-50"); }
+    }
+
+    // WAITING 人工忽略 (WAITING -> DISMISSED 终态): 释放信号闸门
+    async function dismissWaiting(positionId) {
+        if (!confirm("确认忽略这条入场建议?\n\n该 WAITING 记录将标记为 DISMISSED (终态),\n之后再次满足入场条件会重新发出建议。")) return;
+        try {
+            const res = await apiFetch(`/api/leaps/${positionId}/dismiss`, { method: "POST" });
+            if (res.ok) { location.reload(); return; }
+            const err = await res.json().catch(() => ({}));
+            alert("忽略失败: " + (err.detail || res.status));
+        } catch (e) { /* apiFetch 已提示 */ }
+    }
+</script>
+{% endblock %}

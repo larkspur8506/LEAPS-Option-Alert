@@ -26,13 +26,15 @@ def utcnow_naive() -> datetime:
 
 def log_alert(db, alert_type: str, rule_name: str, message: str, success: bool,
               error_message: Optional[str] = None, cycle_id: Optional[int] = None,
+              position_id: Optional[int] = None,
               triggered_at: Optional[datetime] = None) -> None:
     """
     将一条已格式化的完整消息写入 AlertLog。
 
     message 必须是企业微信实际发送的完整文本 (formatted_message),
     而不是摘要或 dict json。发送失败时 message 同样完整保存。
-    cycle_id 用于把提醒与 GridCycle 绑定, 支持重启后仍有效的落库级去重。
+    cycle_id 为历史 grid 遗留绑定列 (LEAPS 模式不写);
+    position_id 把提醒与 OptionPosition 绑定, 支持重启后仍有效的落库级去重。
     """
     from app.database.models import AlertLog
 
@@ -42,7 +44,7 @@ def log_alert(db, alert_type: str, rule_name: str, message: str, success: bool,
             rule_name=rule_name,
             message=message,
             sent_successfully=success,
-            position_id=None,
+            position_id=position_id,
             cycle_id=cycle_id,
             triggered_at=triggered_at or utcnow_naive(),
         )
@@ -77,14 +79,15 @@ def count_alerts_today(db, alert_type: Optional[str] = None, now_utc: Optional[d
 
 def alerted_within(db, alert_type: str, within_seconds: Optional[int] = None,
                    cycle_id: Optional[int] = None,
+                   position_id: Optional[int] = None,
                    now_utc: Optional[datetime] = None,
                    since_utc: Optional[datetime] = None) -> bool:
     """
-    落库级去重查询: 指定时间窗内是否已存在同类型(且同 cycle)的告警记录。
+    落库级去重查询: 指定时间窗内是否已存在同类型(且同 cycle/position)的告警记录。
 
     用于进程重启后仍然生效的去重 (内存态 dedup 在重启后会丢失):
     - 日报: within_seconds=86400, cycle_id=None -> 当天是否已发过
-    - 止损提醒/破位提醒: 传 cycle_id, within_seconds 取足够大的窗口
+    - 加仓提醒等: 传 position_id, within_seconds 取足够大的窗口
 
     也可以通过 `since_utc` 直接给定窗起点 (例如"美东当天 00:00 对应的 UTC 时刻")。
     日报这类"按自然日"去重必须用 since_utc: 滚动 24 小时窗口会把"上一次日报"
@@ -103,6 +106,8 @@ def alerted_within(db, alert_type: str, within_seconds: Optional[int] = None,
     )
     if cycle_id is not None:
         query = query.filter(AlertLog.cycle_id == cycle_id)
+    if position_id is not None:
+        query = query.filter(AlertLog.position_id == position_id)
     try:
         return query.first() is not None
     except Exception as e:

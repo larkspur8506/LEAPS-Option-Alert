@@ -3,26 +3,26 @@
 {% block title %}Dashboard{% endblock %}
 
 {% block content %}
-{% set running = grid_dash.running_cycle %}
-{% set waiting = grid_dash.waiting_cycle %}
-{% set theo = grid_dash.theoretical_grid_position %}
+{% set holding = leaps_dash.holding_position %}
+{% set waiting = leaps_dash.waiting_position %}
+{% set latest = leaps_dash.latest_position or {} %}
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex justify-between items-center mb-8">
         <div>
-            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">NDX Grid Dashboard</h1>
-            <p class="text-sm text-gray-500 mt-1">Nasdaq-100 做多网格提醒系统概览</p>
+            <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">QQQ LEAPS Dashboard</h1>
+            <p class="text-sm text-gray-500 mt-1">纳指100 ETF 长期看涨期权 (LEAPS) 信号提醒系统概览</p>
         </div>
         <a href="/admin/logout"
             class="text-sm font-medium text-red-600 hover:text-red-700 transition bg-red-50 hover:bg-red-100 px-4 py-2 rounded-lg">退出登录</a>
     </div>
 
-    <!-- NDX 市场信息 -->
+    <!-- QQQ 市场信息 -->
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 mb-8">
         <div class="bg-white p-6 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
-            <h3 class="text-sm font-medium text-gray-500 mb-1 uppercase tracking-wider">NDX 现价</h3>
-            <p class="text-3xl font-bold text-gray-900" id="v-ndx-price">{{ "%.2f"|format(ndx.last_price) if ndx.last_price is not none else "-" }}</p>
-            {% if ndx.is_data_fresh %}
+            <h3 class="text-sm font-medium text-gray-500 mb-1 uppercase tracking-wider">QQQ 现价</h3>
+            <p class="text-3xl font-bold text-gray-900" id="v-qqq-price">{{ "%.2f"|format(qqq.last_price) if qqq.last_price is not none else "-" }}</p>
+            {% if qqq.is_data_fresh %}
             <p class="text-xs text-green-600 mt-1 font-medium">数据新鲜 ✓</p>
             {% else %}
             <p class="text-xs text-red-500 mt-1 font-medium">数据过期 ⚠</p>
@@ -31,29 +31,29 @@
 
         <div class="bg-white p-6 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
             <h3 class="text-sm font-medium text-gray-500 mb-1 uppercase tracking-wider">RSI (14)</h3>
-            <p class="text-3xl font-bold text-gray-900" id="v-ndx-rsi">{{ "%.2f"|format(ndx.rsi) if ndx.rsi is not none else "-" }}</p>
-            {% if ndx.rsi is not none %}
-            <p class="text-xs mt-1 font-medium {{ 'text-red-600' if ndx.rsi < 35 else 'text-gray-400' }}">
-                {{ '超卖区 (<35)' if ndx.rsi < 35 else '正常波动' }}
+            <p class="text-3xl font-bold text-gray-900" id="v-qqq-rsi">{{ "%.2f"|format(qqq.rsi) if qqq.rsi is not none else "-" }}</p>
+            {% if qqq.rsi is not none %}
+            <p class="text-xs mt-1 font-medium {{ 'text-red-600' if qqq.rsi < 35 else 'text-gray-400' }}">
+                {{ '超卖区 (<35)' if qqq.rsi < 35 else '正常波动' }}
             </p>
             {% endif %}
         </div>
 
         <div class="bg-white p-6 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
             <h3 class="text-sm font-medium text-gray-500 mb-1 uppercase tracking-wider">SMA200</h3>
-            <p class="text-3xl font-bold text-gray-900" id="v-ndx-sma">{{ "%.2f"|format(ndx.ma200) if ndx.ma200 is not none else "-" }}</p>
+            <p class="text-3xl font-bold text-gray-900" id="v-qqq-sma">{{ "%.2f"|format(qqq.ma200) if qqq.ma200 is not none else "-" }}</p>
         </div>
 
         <div class="bg-white p-6 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
             <h3 class="text-sm font-medium text-gray-500 mb-1 uppercase tracking-wider">一年前价格</h3>
-            <p class="text-3xl font-bold text-gray-900" id="v-ndx-1y">{{ "%.2f"|format(ndx.price_1y_ago) if ndx.price_1y_ago is not none else "-" }}</p>
+            <p class="text-3xl font-bold text-gray-900" id="v-qqq-1y">{{ "%.2f"|format(qqq.price_1y_ago) if qqq.price_1y_ago is not none else "-" }}</p>
         </div>
 
         <div class="bg-white p-6 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100">
             <h3 class="text-sm font-medium text-gray-500 mb-1 uppercase tracking-wider">入场信号</h3>
-            {% if ndx.entry_signal is none %}
+            {% if qqq.entry_signal is none %}
             <p class="text-lg font-bold text-gray-400 mt-2">数据不足</p>
-            {% elif ndx.entry_signal %}
+            {% elif qqq.entry_signal %}
             <p class="text-lg font-bold text-green-700 mt-2">信号满足</p>
             {% else %}
             <p class="text-lg font-bold text-gray-400 mt-2">未满足</p>
@@ -70,36 +70,29 @@
         </div>
     </div>
 
-    <!-- 当前 Grid 状态 -->
-    {% if running %}
+    <!-- 当前仓位状态 -->
+    {% if holding %}
     <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 overflow-hidden mb-8">
         <div class="px-6 py-4 bg-green-50/60 border-b border-green-100 flex justify-between items-center">
             <div class="flex items-center gap-3">
                 <span class="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse"></span>
-                <h2 class="text-base font-bold text-green-700">RUNNING — MANUAL GRID ACTIVE</h2>
+                <h2 class="text-base font-bold text-green-700">HOLDING — LEAPS 持仓中</h2>
             </div>
-            <span class="text-xs text-gray-500">GridCycle #{{ running.id }}</span>
+            <span class="text-xs text-gray-500">Position #{{ holding.id }}</span>
         </div>
         <div class="p-6 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-2">
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Actual Base</h3><p class="text-lg font-bold text-gray-900" id="v-r-base">{{ "%.2f"|format(running.actual_base_price) if running.actual_base_price is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Actual Upper</h3><p class="text-lg font-bold text-green-700" id="v-r-upper">{{ "%.2f"|format(running.actual_upper_price) if running.actual_upper_price is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Actual Lower</h3><p class="text-lg font-bold text-red-700" id="v-r-lower">{{ "%.2f"|format(running.actual_lower_price) if running.actual_lower_price is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">格数</h3><p class="text-lg font-bold text-gray-900">{{ running.actual_grid_count if running.actual_grid_count is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">杠杆</h3><p class="text-lg font-bold text-gray-900">{{ "%.1fx"|format(running.actual_leverage) if running.actual_leverage is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">保证金</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(running.actual_margin) if running.actual_margin is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">理论格位</h3><p class="text-lg font-bold text-gray-900">{{ theo.description if theo and theo.description else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">合约</h3><p class="text-lg font-bold text-gray-900">Call {{ "%.2f"|format(holding.strike) if holding.strike is not none else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">到期日</h3><p class="text-lg font-bold text-gray-900">{{ holding.expiration_date or "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">张数</h3><p class="text-lg font-bold text-gray-900">{{ holding.quantity }} <span class="text-xs text-gray-400">(+{{ holding.add_count }})</span></p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">入场权利金</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(holding.entry_price) if holding.entry_price is not none else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">累计成本</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(holding.total_cost) if holding.total_cost is not none else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">最新权利金</h3><p class="text-lg font-bold text-blue-700" id="v-h-premium">{{ "%.2f"|format(holding.current_premium) if holding.current_premium is not none else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">信号基准价</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(holding.signal_base_price) if holding.signal_base_price is not none else "-" }}</p></div>
         </div>
-        <div class="px-6 pb-6 flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-            {% if theo %}
-            <div class="text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2.5">
-                距离 Upper <span class="font-bold text-green-700 font-mono" id="v-pos-dist-upper">{{ "%.2f"|format(theo.distance_to_upper) }}</span>
-                · 距离 Lower <span class="font-bold text-red-700 font-mono" id="v-pos-dist-lower">{{ "%.2f"|format(theo.distance_to_lower) }}</span>
-                <span class="text-gray-400 ml-2">理论状态, 不代表实际持仓/盈亏</span>
-            </div>
-            {% endif %}
-            <a href="/admin/grid"
-                class="sm:ml-auto bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
-                手动关闭 →
+        <div class="px-6 pb-6">
+            <a href="/admin/positions"
+                class="inline-block bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
+                平仓 / 加仓 →
             </a>
         </div>
     </div>
@@ -110,22 +103,21 @@
                 <span class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
                 <h2 class="text-base font-bold text-amber-700">WAITING — ENTRY SIGNAL DETECTED</h2>
             </div>
-            <span class="text-xs text-gray-500">GridCycle #{{ waiting.id }}</span>
+            <span class="text-xs text-gray-500">Position #{{ waiting.id }}</span>
         </div>
-        <div class="p-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">建议 Base</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(waiting.suggested_base_price) if waiting.suggested_base_price is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">建议 Upper</h3><p class="text-lg font-bold text-green-700">{{ "%.2f"|format(waiting.suggested_upper_price) if waiting.suggested_upper_price is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">建议 Lower</h3><p class="text-lg font-bold text-red-700">{{ "%.2f"|format(waiting.suggested_lower_price) if waiting.suggested_lower_price is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">格数</h3><p class="text-lg font-bold text-gray-900">{{ waiting.suggested_grid_count if waiting.suggested_grid_count is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">步长</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(waiting.suggested_grid_step) if waiting.suggested_grid_step is not none else "-" }}</p></div>
-            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">杠杆</h3><p class="text-lg font-bold text-gray-900">{{ "%.1fx"|format(waiting.suggested_leverage) if waiting.suggested_leverage is not none else "-" }}</p></div>
+        <div class="p-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">信号基准价</h3><p class="text-lg font-bold text-gray-900">{{ "%.2f"|format(waiting.signal_base_price) if waiting.signal_base_price is not none else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">触发 RSI</h3><p class="text-lg font-bold text-gray-900">{{ "%.1f"|format(waiting.signal_rsi) if waiting.signal_rsi is not none else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">建议 Delta</h3><p class="text-lg font-bold text-blue-700">≈ {{ "%.2f"|format(waiting.suggested_delta) if waiting.suggested_delta is not none else "-" }}</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">建议期限</h3><p class="text-lg font-bold text-blue-700">≈ {{ waiting.suggested_tenor_days }} 天</p></div>
+            <div><h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">类型</h3><p class="text-lg font-bold text-gray-900">QQQ Call (LEAPS)</p></div>
         </div>
         <div class="px-6 pb-6">
-            <a href="/admin/grid"
+            <a href="/admin/positions"
                 class="inline-block bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
-                确认启动 (录入实际参数) →
+                确认建仓 (录入实际参数) →
             </a>
-            <p class="text-xs text-gray-400 mt-2">请在交易所实际开启网格后, 到 Grid 管理页录入实际参数。系统不会自动下单。</p>
+            <p class="text-xs text-gray-400 mt-2">请在券商实际买入合约后, 到持仓管理页录入实际参数。系统不会自动下单。</p>
         </div>
     </div>
     {% else %}
@@ -133,24 +125,24 @@
         <div class="flex items-center gap-4">
             <span class="w-3 h-3 rounded-full bg-gray-400"></span>
             <div>
-                <h2 class="text-lg font-bold text-gray-700">NO ACTIVE GRID</h2>
-                {% if latest_cycle %}
-                <p class="text-sm text-gray-500 mt-0.5">最近一次记录: <span class="font-semibold">#{{ latest_cycle.id }} {{ latest_cycle.status }}</span>{% if latest_cycle.close_reason %} ({{ latest_cycle.close_reason }}){% endif %}</p>
+                <h2 class="text-lg font-bold text-gray-700">NO ACTIVE POSITION</h2>
+                {% if latest %}
+                <p class="text-sm text-gray-500 mt-0.5">最近一次记录: <span class="font-semibold">#{{ latest.id }} {{ latest.status }}</span>{% if latest.close_reason %} ({{ latest.close_reason }}){% endif %}</p>
                 {% else %}
-                <p class="text-sm text-gray-500 mt-0.5">当前没有 WAITING 或 RUNNING 状态的网格周期</p>
+                <p class="text-sm text-gray-500 mt-0.5">当前没有 WAITING 或 HOLDING 状态的期权仓位</p>
                 {% endif %}
             </div>
         </div>
-        <a href="/admin/grid"
+        <a href="/admin/positions"
             class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95 whitespace-nowrap">
-            Grid 管理 →
+            持仓管理 →
         </a>
     </div>
     {% endif %}
 
     <!-- 快捷入口 -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <a href="/admin/grid"
+        <a href="/admin/positions"
             class="group bg-white p-6 rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 hover:shadow-md transition-all duration-300">
             <div class="flex items-center justify-between mb-4">
                 <div class="p-3 bg-blue-50 rounded-xl group-hover:bg-blue-100 transition-colors">
@@ -164,8 +156,8 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                 </svg>
             </div>
-            <h3 class="text-lg font-bold text-gray-900 mb-1">Grid 管理</h3>
-            <p class="text-sm text-gray-500">查看/启动/关闭网格, 浏览历史周期</p>
+            <h3 class="text-lg font-bold text-gray-900 mb-1">持仓管理</h3>
+            <p class="text-sm text-gray-500">确认建仓/加仓/平仓, 浏览历史仓位</p>
         </a>
 
         <a href="/admin/rules"
@@ -185,7 +177,7 @@
                 </svg>
             </div>
             <h3 class="text-lg font-bold text-gray-900 mb-1">规则配置</h3>
-            <p class="text-sm text-gray-500">NDX 网格入场条件与策略参数</p>
+            <p class="text-sm text-gray-500">LEAPS 入场/加仓/退出策略参数</p>
         </a>
 
         <a href="/admin/logs"
@@ -209,36 +201,30 @@
 </div>
 
 <script>
-    // 纯展示轮询: 只刷新数值; Grid 状态变化时整页刷新 (交回服务端渲染)
+    // 纯展示轮询: 只刷新数值; 仓位状态变化时整页刷新 (交回服务端渲染)
     function updateValue(id, val, decimals) {
         const el = document.getElementById(id);
         if (!el) return;
         el.textContent = val == null ? "-" : Number(val).toFixed(decimals);
     }
     function stateSignature(d) {
-        const r = d.running_cycle, w = d.waiting_cycle;
-        return (w ? w.id + ":" + w.status : "-") + "|" + (r ? r.id + ":" + r.status : "-");
+        const h = d.holding_position, w = d.waiting_position;
+        return (w ? w.id + ":" + w.status : "-") + "|" + (h ? h.id + ":" + h.status : "-");
     }
-    const INITIAL_SIG = stateSignature({{ grid_dash|tojson }});
+    const INITIAL_SIG = stateSignature({{ leaps_dash|tojson }});
 
     async function poll() {
         try {
-            const res = await fetch("/api/grid/status");
+            const res = await fetch("/api/leaps/status");
             if (!res.ok) return;
             const data = await res.json();
             if (stateSignature(data) !== INITIAL_SIG) { location.reload(); return; }
-            updateValue("v-ndx-price", data.ndx ? data.ndx.last_price : null, 2);
-            updateValue("v-ndx-rsi", data.ndx ? data.ndx.rsi : null, 2);
-            updateValue("v-ndx-sma", data.ndx ? data.ndx.ma200 : null, 2);
-            updateValue("v-ndx-1y", data.ndx ? data.ndx.price_1y_ago : null, 2);
-            if (data.running_cycle) {
-                updateValue("v-r-base", data.running_cycle.actual_base_price, 2);
-                updateValue("v-r-upper", data.running_cycle.actual_upper_price, 2);
-                updateValue("v-r-lower", data.running_cycle.actual_lower_price, 2);
-            }
-            if (data.theoretical_grid_position) {
-                updateValue("v-pos-dist-upper", data.theoretical_grid_position.distance_to_upper, 2);
-                updateValue("v-pos-dist-lower", data.theoretical_grid_position.distance_to_lower, 2);
+            updateValue("v-qqq-price", data.qqq ? data.qqq.last_price : null, 2);
+            updateValue("v-qqq-rsi", data.qqq ? data.qqq.rsi : null, 2);
+            updateValue("v-qqq-sma", data.qqq ? data.qqq.ma200 : null, 2);
+            updateValue("v-qqq-1y", data.qqq ? data.qqq.price_1y_ago : null, 2);
+            if (data.holding_position) {
+                updateValue("v-h-premium", data.holding_position.current_premium, 2);
             }
         } catch (e) { /* 瞬时网络错误, 保留当前数据 */ }
     }

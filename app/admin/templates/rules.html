@@ -7,7 +7,7 @@
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
         <div>
             <h1 class="text-2xl font-semibold text-gray-900 tracking-tight">策略规则</h1>
-            <p class="text-sm text-gray-500 mt-1">NDX 网格策略参数与历史规则说明</p>
+            <p class="text-sm text-gray-500 mt-1">QQQ LEAPS 策略参数（回测验证口径：1999-2026 共 49 个历史信号）</p>
         </div>
         <div class="flex gap-3 w-full sm:w-auto">
             <a href="/admin"
@@ -21,9 +21,90 @@
         <!-- 保存成功提示 -->
         {% if report_saved %}
         <div class="p-4 bg-green-50 border border-green-200 rounded-2xl text-sm text-green-700 font-medium">
-            ✓ 日报设置已保存
+            ✓ 设置已保存
         </div>
         {% endif %}
+
+        <!-- LEAPS 策略参数 (可编辑) -->
+        <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
+            <div class="flex items-center gap-3 mb-4">
+                <div class="p-2 bg-blue-50 rounded-lg">
+                    <span class="text-xl">📊</span>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-900">LEAPS 策略参数</h2>
+                    <p class="text-sm text-gray-500">入场 / 加仓 / 退出规则, 保存后立即生效 (下一轮监控周期)</p>
+                </div>
+            </div>
+
+            <form action="/admin/rules/strategy" method="post" class="space-y-4 sm:pl-14">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">止盈 RSI 阈值 (RSI14 &gt; 值时止盈)</label>
+                        <input name="tp_rsi" type="number" step="0.1" value="{{ tp_rsi }}" required
+                            class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                        <p class="text-[11px] text-gray-400 mt-1">回测: 65 → 26年仅 2 笔亏损; 70 → 期望更高但尾部更深</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">时间止损 (交易日)</label>
+                        <input name="time_stop_days" type="number" step="1" value="{{ time_stop_days }}" required
+                            class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                        <p class="text-[11px] text-gray-400 mt-1">持仓超期且未回本 → 提醒平仓 (回测定稿 126)</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">DTE 强制平仓 (自然日)</label>
+                        <input name="dte_force_days" type="number" step="1" value="{{ dte_force_days }}" required
+                            class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                        <p class="text-[11px] text-gray-400 mt-1">距到期不足该天数 → 强制清仓提醒 (沿用早期 180)</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">加仓档位 (相对信号基准, 逗号分隔)</label>
+                        <input name="add_levels" type="text" value="{{ add_levels }}" required
+                            class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                        <p class="text-[11px] text-gray-400 mt-1">如 0.10,0.20 = 跌 10% / 20% 各提醒加 1 张</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">最大张数</label>
+                        <input name="max_quantity" type="number" step="1" min="1" value="{{ max_quantity }}" required
+                            class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                        <p class="text-[11px] text-gray-400 mt-1">含首张, 单信号仓位封顶</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">建议 Delta</label>
+                        <input name="target_delta" type="number" step="0.01" value="{{ target_delta }}" required
+                            class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                        <p class="text-[11px] text-gray-400 mt-1">0.60-0.70 差异小, 推荐 0.65 (轻微实值)</p>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">建议期限 (自然日)</label>
+                        <input name="target_tenor_days" type="number" step="1" value="{{ target_tenor_days }}" required
+                            class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                        <p class="text-[11px] text-gray-400 mt-1">约 2 年 = 730 天; theta 慢, 扛得住阴跌</p>
+                    </div>
+                </div>
+                <div class="pt-2">
+                    <button type="submit"
+                        class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
+                        保存策略参数
+                    </button>
+                </div>
+            </form>
+
+            <div class="p-4 bg-blue-50 rounded-xl border border-blue-100 sm:ml-14 mt-4">
+                <h3 class="font-medium text-blue-900 mb-1 text-sm">💡 QQQ 入场条件 (固定)</h3>
+                <p class="text-sm text-blue-800">
+                    监控 <strong>QQQ</strong> 日线: 当 <strong>RSI14 跌破 35</strong>,
+                    且 <strong>连续 3 个交易日收盘价大于 SMA200</strong>,
+                    且 <strong>当前价格高于一年前价格</strong> 时, 系统创建 WAITING 建议合约
+                    (0.65Δ / 约 2 年 QQQ Call)。用户在券商手动买入后录入实际参数确认建仓。
+                </p>
+                <p class="text-xs text-blue-700 mt-2">
+                    判定基准为 <strong>最后一根已收盘日 K</strong> (收盘确认制): 盘中最后一根未收盘 bar 的 RSI 波动不会触发信号。
+                    {% if waiting_ttl_trading_days %}WAITING 建议若 {{ waiting_ttl_trading_days }} 个交易日内未确认将自动过期 (可在持仓页人工忽略)。{% endif %}
+                    退出三线先到先出: RSI 止盈 / 时间止损 / DTE 强制平仓。
+                </p>
+            </div>
+        </div>
 
         <!-- 每日 16:30 日报 -->
         <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
@@ -33,7 +114,7 @@
                 </div>
                 <div>
                     <h2 class="text-lg font-bold text-gray-900">每日 16:30 日报</h2>
-                    <p class="text-sm text-gray-500">每天美股交易日结束后发送一次日报，一次只发送一种</p>
+                    <p class="text-sm text-gray-500">每天美股交易日结束后发送一次日报</p>
                 </div>
             </div>
 
@@ -46,11 +127,11 @@
                     <span class="text-xs text-gray-400">不发送每日日报</span>
                 </label>
                 <label class="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100 cursor-pointer hover:bg-gray-100 transition-colors">
-                    <input type="radio" name="daily_report_mode" value="ndx_grid"
-                        {% if daily_report_mode == 'ndx_grid' %}checked{% endif %}
+                    <input type="radio" name="daily_report_mode" value="leaps"
+                        {% if daily_report_mode == 'leaps' %}checked{% endif %}
                         class="w-4 h-4 text-blue-600 focus:ring-blue-500/20">
-                    <span class="text-sm font-medium text-gray-700">NDX Grid 日报</span>
-                    <span class="text-xs text-gray-400">NDX 行情与网格状态摘要</span>
+                    <span class="text-sm font-medium text-gray-700">QQQ LEAPS 日报</span>
+                    <span class="text-xs text-gray-400">QQQ 行情、信号状态与仓位摘要</span>
                 </label>
                 <div class="pt-2">
                     <button type="submit"
@@ -59,88 +140,6 @@
                     </button>
                 </div>
             </form>
-        </div>
-
-        <!-- NDX Grid 策略参数 (只读, 数据来自后端配置) -->
-        <div class="bg-white rounded-2xl shadow-[0_2px_12px_rgba(0,0,0,0.04)] border border-gray-100 p-6">
-            <div class="flex items-center gap-3 mb-4">
-                <div class="p-2 bg-blue-50 rounded-lg">
-                    <span class="text-xl">📊</span>
-                </div>
-                <div>
-                    <h2 class="text-lg font-bold text-gray-900">NDX Grid 策略参数</h2>
-                    <p class="text-sm text-gray-500">做多算术网格的开仓条件与默认建议参数</p>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4 pl-0 sm:pl-14">
-                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
-                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">RSI Threshold</h3>
-                    <p class="text-2xl font-bold text-gray-900">{{ "%.1f"|format(grid_rsi_threshold) }}</p>
-                </div>
-                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
-                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Grid Upper</h3>
-                    <p class="text-2xl font-bold text-green-700">{{ "%.0f%%"|format(grid_upper_pct * 100) }}</p>
-                </div>
-                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
-                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Grid Lower</h3>
-                    <p class="text-2xl font-bold text-red-700">-{{ "%.0f%%"|format(grid_lower_pct * 100) }}</p>
-                </div>
-                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
-                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Grid Count</h3>
-                    <p class="text-2xl font-bold text-gray-900">{{ grid_count }}</p>
-                </div>
-                <div class="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
-                    <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Leverage</h3>
-                    <p class="text-2xl font-bold text-gray-900">{{ "%.1fx"|format(grid_leverage) }}</p>
-                </div>
-            </div>
-
-            <div class="p-4 bg-blue-50 rounded-xl border border-blue-100 sm:ml-14">
-                <h3 class="font-medium text-blue-900 mb-1 text-sm">💡 NDX 开仓条件</h3>
-                <p class="text-sm text-blue-800">
-                    监控 <strong>NDX (^NDX)</strong> 日线: 当 <strong>RSI14 跌破 {{ "%.0f"|format(grid_rsi_threshold) }}</strong>,
-                    且 <strong>连续 3 个交易日收盘价大于 SMA200</strong>,
-                    且 <strong>当前价格高于一年前价格</strong> 时, 系统创建 WAITING 建议网格
-                    (Upper = Base +{{ "%.0f%%"|format(grid_upper_pct * 100) }},
-                    Lower = Base -{{ "%.0f%%"|format(grid_lower_pct * 100) }},
-                    共 {{ grid_count }} 格 / {{ grid_count + 1 }} 个价格节点)。
-                    用户在交易所手动开网格后录入实际参数, 实际杠杆可与建议值不同。
-                </p>
-                <p class="text-xs text-blue-700 mt-2">
-                    判定基准为 <strong>最后一根已收盘日 K</strong> (收盘确认制): 盘中最后一根未收盘 bar 的 RSI 波动不会触发信号。
-                    {% if waiting_ttl_trading_days %}WAITING 建议若 {{ waiting_ttl_trading_days }} 个交易日内未确认将自动过期 (可在管理页人工忽略)。{% endif %}
-                </p>
-                <p class="text-xs text-blue-600 mt-2">以上参数为只读展示, 当前来源于系统配置 (环境变量/默认值), 修改需更新系统配置。</p>
-            </div>
-
-            {% set risk = risk_snapshot %}
-            {% if risk and not risk.get('error') %}
-            <div class="p-4 bg-amber-50 rounded-xl border border-amber-100 sm:ml-14 mt-4">
-                <h3 class="font-medium text-amber-900 mb-2 text-sm">⚠️ 风险 / 成本速算 (估算)</h3>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-amber-900">
-                    <div>每格价格幅度<br><span class="text-base font-bold font-mono">{{ "%.3f"|format(risk.get('grid_step_pct')) if risk.get('grid_step_pct') is not none else "-" }}%</span></div>
-                    <div>往返手续费<br><span class="text-base font-bold font-mono">{{ "%.3f"|format(risk.get('round_trip_fee_pct')) if risk.get('round_trip_fee_pct') is not none else "-" }}%</span></div>
-                    <div>手续费占格距<br><span class="text-base font-bold font-mono">{{ "%.1f"|format(risk.get('fee_ratio_of_step_pct')) if risk.get('fee_ratio_of_step_pct') is not none else "-" }}%</span></div>
-                    <div>每格净毛利<br><span class="text-base font-bold font-mono">{{ "%.3f"|format(risk.get('net_edge_pct_per_grid')) if risk.get('net_edge_pct_per_grid') is not none else "-" }}%</span></div>
-                </div>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-amber-900 mt-3 pt-3 border-t border-amber-200">
-                    <div>满仓估算均价<br><span class="text-base font-bold font-mono">{{ "%.2f"|format(risk.get('avg_entry_at_full_load')) if risk.get('avg_entry_at_full_load') is not none else "-" }}</span></div>
-                    <div>打到下轨浮亏 (保证金口径)<br><span class="text-base font-bold font-mono text-red-700">{{ "%.1f"|format(risk.get('margin_loss_at_lower_pct')) if risk.get('margin_loss_at_lower_pct') is not none else "-" }}%</span></div>
-                    <div>估算强平价<br><span class="text-base font-bold font-mono">{{ "%.2f"|format(risk.get('est_liquidation_price')) if risk.get('est_liquidation_price') is not none else "-" }}</span></div>
-                    <div>下轨距强平<br><span class="text-base font-bold font-mono">{{ "%.1f"|format(risk.get('lower_vs_liquidation_pct')) if risk.get('lower_vs_liquidation_pct') is not none else "-" }}%</span></div>
-                </div>
-                {% if risk.get('funding_cost_pct_per_day') %}
-                <p class="text-xs text-amber-900 mt-3">
-                    资金费拖累: 约 {{ "%.3f"|format(risk.get('funding_cost_pct_per_day')) }}% / 天
-                    (按每 8 小时 {{ "%.3f"|format(risk.get('funding_rate_pct_8h')) }}% 计), 30 天约 {{ "%.2f"|format(risk.get('funding_cost_pct_30d')) }}% 保证金。
-                </p>
-                {% endif %}
-                <p class="text-[11px] text-amber-700 mt-2">
-                    {{ risk.get('note') }} · 参数基准: {{ "实际运行参数" if risk.get('basis') == "ACTUAL_PARAMS" else "当前建议参数" }}
-                </p>
-            </div>
-            {% endif %}
         </div>
     </div>
 </div>
