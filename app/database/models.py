@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Date, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 
@@ -16,9 +16,18 @@ class Configuration(Base):
 
     alert_log_retention_days = Column(Integer, default=90)
 
-    # 每日 16:30 日报模式 ('off' / 'ndx_grid')
-    # 历史 'legacy' 值与 NULL / 非法值在 Config 读取层归一化为 'ndx_grid'
-    daily_report_mode = Column(String(20), nullable=True, default="ndx_grid")
+    # 每日 16:30 日报模式 ('off' / 'leaps')
+    # 历史 'ndx_grid' / 'legacy' 值在 Config 读取层归一化为 'leaps'
+    daily_report_mode = Column(String(20), nullable=True, default="leaps")
+
+    # ---- LEAPS 策略参数 (后台可调, DB 优先于 env) ----
+    leaps_tp_rsi = Column(Float, nullable=True)              # 止盈 RSI (默认 65)
+    leaps_time_stop_trading_days = Column(Integer, nullable=True)  # 时间止损 (默认 126 交易日)
+    leaps_dte_force_days = Column(Integer, nullable=True)    # DTE 强制平仓 (默认 180 天)
+    leaps_add_levels = Column(String(50), nullable=True)     # 加仓回撤档 "0.10,0.20"
+    leaps_max_quantity = Column(Integer, nullable=True)      # 单信号最大张数 (默认 3)
+    leaps_target_delta = Column(Float, nullable=True)        # 建议 Delta (默认 0.65)
+    leaps_target_tenor_days = Column(Integer, nullable=True) # 建议期限 (默认 730 天)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -40,42 +49,49 @@ class AlertLog(Base):
     sent_successfully = Column(Boolean, default=True)
     error_message = Column(Text, nullable=True)
 
-    # legacy 期权仓位遗留列: NDX 始终写 NULL, 保留以免触碰历史 schema
-    position_id = Column(Integer, nullable=True)
+    # 关联的 OptionPosition id (可空): 用于"同一仓位只提醒一次"的落库级去重
+    position_id = Column(Integer, nullable=True, index=True)
 
-    # 关联的 GridCycle id (可空): 用于"同一周期只提醒一次"的落库级去重
-    # (进程重启后仍然有效, 见 app/alerts/alert_log.py::alerted_within)
-    cycle_id = Column(Integer, nullable=True, index=True)
+    # 历史 grid 周期遗留列: LEAPS 模式始终写 NULL, 保留以免触碰历史 schema
+    cycle_id = Column(Integer, nullable=True)
 
 
-class GridCycle(Base):
-    __tablename__ = "grid_cycles"
+class OptionPosition(Base):
+    """LEAPS 期权仓位 (信号建议 → 用户确认买入 → 持仓监控 → 平仓)。
+
+    生命周期: WAITING -> HOLDING -> CLOSED
+              WAITING -> DISMISSED / EXPIRED (终态, 未执行)
+    """
+    __tablename__ = "option_positions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # 生命周期状态: 'WAITING', 'RUNNING', 'CLOSED', 'STOPPED'
     status = Column(String(20), default="WAITING", nullable=False, index=True)
 
-    # --- 系统建议参数 (开仓信号触发时生成并保存) ---
-    suggested_base_price = Column(Float, nullable=False)
-    suggested_upper_price = Column(Float, nullable=False)
-    suggested_lower_price = Column(Float, nullable=False)
-    suggested_grid_count = Column(Integer, default=200, nullable=False)
-    suggested_leverage = Column(Float, default=5.0, nullable=False)
+    # --- 信号基准 (WAITING 时生成, 不可变) ---
+    signal_base_price = Column(Float, nullable=False)   # 触发日 QQQ 收盘价 (加仓判断基准)
+    signal_rsi = Column(Float, nullable=True)           # 触发时 RSI
+    signal_bar_date = Column(String(30), nullable=True) # 判定基准 bar (收盘确认制)
+    suggested_delta = Column(Float, nullable=True)      # 建议 Delta (0.65)
+    suggested_tenor_days = Column(Integer, nullable=True)  # 建议期限 (交易日)
 
-    # --- 用户实际参数 (用户在交易所开仓后录入，RUNNING 启动时永久冻结) ---
-    actual_base_price = Column(Float, nullable=True)
-    actual_upper_price = Column(Float, nullable=True)
-    actual_lower_price = Column(Float, nullable=True)
-    actual_grid_count = Column(Integer, nullable=True)
-    actual_leverage = Column(Float, nullable=True)
-    actual_margin = Column(Float, nullable=True)
+    # --- 用户录入 (确认买入时写入, 此后仅 quantity/total_cost 随加仓变化) ---
+    strike = Column(Float, nullable=True)
+    expiration_date = Column(Date, nullable=True)
+    entry_price = Column(Float, nullable=True)          # 首张每张权利金
+    quantity = Column(Integer, nullable=True)           # 当前总张数
+    total_cost = Column(Float, nullable=True)           # 累计已投入权利金 (加仓累加)
+    entry_date = Column(Date, nullable=True)
+    add_count = Column(Integer, default=0, nullable=False)  # 已加仓次数 (0-2)
 
-    # --- 时间戳轨迹 ---
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    started_at = Column(DateTime, nullable=True)
+    # --- 跟踪与归档 ---
+    current_premium = Column(Float, nullable=True)      # 最新每张权利金 (yfinance 期权链, 尽力而为)
+    premium_updated_at = Column(DateTime, nullable=True)
+    max_pnl_pct = Column(Float, default=0.0)            # 持仓期间最高 PnL% (展示)
     closed_at = Column(DateTime, nullable=True)
-
-    # --- 结束原因与备注 ---
-    close_reason = Column(String(100), nullable=True)
+    close_reason = Column(String(100), nullable=True)   # RSI_TP / TIME_STOP / DTE_FORCE / MANUAL_CLOSE
+    close_premium = Column(Float, nullable=True)        # 平仓总权利金 (用户录入, 仅记录)
     notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

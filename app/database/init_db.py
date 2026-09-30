@@ -30,14 +30,43 @@ def init_db():
 
 def _apply_lightweight_migrations():
     """
-    轻量列迁移 (Phase 6): create_all 不会给已有表加新列。
+    轻量列迁移: create_all 不会给已有表加新列。
     使用 ADD COLUMN IF NOT EXISTS 语义, 幂等可重复执行。
+
+    历史 grid 相关列 (alert_logs.cycle_id 等) 保留不删, 只是代码不再写入;
+    新增列: configuration 的 LEAPS 策略参数 (NULL = 用 env/默认值)。
     """
     migrations = [
-        "ALTER TABLE configuration ADD COLUMN daily_report_mode VARCHAR(20)",
-        "ALTER TABLE alert_logs ADD COLUMN cycle_id INTEGER",
-        "CREATE INDEX IF NOT EXISTS ix_alert_logs_cycle_id ON alert_logs (cycle_id)",
+        "ALTER TABLE configuration ADD COLUMN leaps_tp_rsi FLOAT",
+        "ALTER TABLE configuration ADD COLUMN leaps_time_stop_trading_days INTEGER",
+        "ALTER TABLE configuration ADD COLUMN leaps_dte_force_days INTEGER",
+        "ALTER TABLE configuration ADD COLUMN leaps_add_levels VARCHAR(50)",
+        "ALTER TABLE configuration ADD COLUMN leaps_max_quantity INTEGER",
+        "ALTER TABLE configuration ADD COLUMN leaps_target_delta FLOAT",
+        "ALTER TABLE configuration ADD COLUMN leaps_target_tenor_days INTEGER",
+        "ALTER TABLE alert_logs ADD COLUMN position_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_alert_logs_position_id ON alert_logs (position_id)",
         "CREATE INDEX IF NOT EXISTS ix_alert_logs_type_time ON alert_logs (alert_type, triggered_at)",
+        # option_positions 历史遗留表 (早期 LEAPS 应用创建过): 补齐新 schema 列
+        "ALTER TABLE option_positions ADD COLUMN status VARCHAR(20)",
+        "ALTER TABLE option_positions ADD COLUMN strike FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN signal_base_price FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN signal_rsi FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN signal_bar_date VARCHAR(30)",
+        "ALTER TABLE option_positions ADD COLUMN suggested_delta FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN suggested_tenor_days INTEGER",
+        "ALTER TABLE option_positions ADD COLUMN total_cost FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN add_count INTEGER",
+        "ALTER TABLE option_positions ADD COLUMN current_premium FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN premium_updated_at TIMESTAMP",
+        "ALTER TABLE option_positions ADD COLUMN max_pnl_pct FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN closed_at TIMESTAMP",
+        "ALTER TABLE option_positions ADD COLUMN close_reason VARCHAR(100)",
+        "ALTER TABLE option_positions ADD COLUMN close_premium FLOAT",
+        "ALTER TABLE option_positions ADD COLUMN notes TEXT",
+        "ALTER TABLE option_positions ADD COLUMN created_at TIMESTAMP",
+        "ALTER TABLE option_positions ADD COLUMN updated_at TIMESTAMP",
+        "UPDATE option_positions SET status = 'CLOSED', closed_at = CURRENT_TIMESTAMP WHERE status IS NULL",
     ]
     with engine.connect() as conn:
         for stmt in migrations:

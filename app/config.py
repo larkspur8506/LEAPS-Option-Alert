@@ -19,99 +19,100 @@ class Config:
             return int(self._db_config["alert_log_retention_days"])
         return int(os.getenv("ALERT_LOG_RETENTION_DAYS", "90"))
 
-    # NDX 做多网格策略配置参数 (可优先从环境变量或字典读取，支持后续灵活扩展)
-    def get_rsi_threshold(self) -> float:
-        if self._db_config.get("rsi_threshold") is not None:
-            return float(self._db_config["rsi_threshold"])
-        return float(os.getenv("RSI_THRESHOLD", "35.0"))
+    # ---- QQQ LEAPS 策略参数 (DB 优先于 env; 数值非法时回退默认) ----
 
-    def get_default_grid_upper_pct(self) -> float:
-        if self._db_config.get("default_grid_upper_pct") is not None:
-            return float(self._db_config["default_grid_upper_pct"])
-        return float(os.getenv("DEFAULT_GRID_UPPER_PCT", "0.20"))
+    def _float(self, key: str, env_key: str, default: float) -> float:
+        try:
+            raw = self._db_config.get(key)
+            if raw is not None and raw != "":
+                return float(raw)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return float(os.getenv(env_key, str(default)))
+        except (TypeError, ValueError):
+            return default
 
-    def get_default_grid_lower_pct(self) -> float:
-        if self._db_config.get("default_grid_lower_pct") is not None:
-            return float(self._db_config["default_grid_lower_pct"])
-        return float(os.getenv("DEFAULT_GRID_LOWER_PCT", "0.20"))
+    def _int(self, key: str, env_key: str, default: int) -> int:
+        try:
+            raw = self._db_config.get(key)
+            if raw is not None and raw != "":
+                return int(raw)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return int(os.getenv(env_key, str(default)))
+        except (TypeError, ValueError):
+            return default
 
-    def get_default_grid_count(self) -> int:
-        if self._db_config.get("default_grid_count") is not None:
-            return int(self._db_config["default_grid_count"])
-        return int(os.getenv("DEFAULT_GRID_COUNT", "200"))
+    def get_entry_rsi_threshold(self) -> float:
+        """入场: RSI14 < 阈值 (回测定稿 35)"""
+        return self._float("rsi_threshold", "RSI_THRESHOLD", 35.0)
 
-    def get_default_grid_leverage(self) -> float:
-        if self._db_config.get("default_grid_leverage") is not None:
-            return float(self._db_config["default_grid_leverage"])
-        return float(os.getenv("DEFAULT_GRID_LEVERAGE", "5.0"))
+    def get_tp_rsi(self) -> float:
+        """止盈: RSI14 > 阈值 (QQQ 回测最优 65)"""
+        return self._float("leaps_tp_rsi", "LEAPS_TP_RSI", 65.0)
 
-    def get_default_grid_stop_loss_after_lower_pct(self) -> float:
-        """
-        Grid Lower 被跌破后, 再向下多少比例触发止损提醒。
-        仅用于 NDX_GRID_STOP_LOSS 通知事件, 不影响 Grid 状态机 (STOPPED 语义不变)。
-        计算公式: stop_loss_alert_price = lower_price * (1 - pct)
-        """
-        if self._db_config.get("default_grid_stop_loss_after_lower_pct") is not None:
-            return float(self._db_config["default_grid_stop_loss_after_lower_pct"])
-        return float(os.getenv("DEFAULT_GRID_STOP_LOSS_AFTER_LOWER_PCT", "0.10"))
+    def get_time_stop_trading_days(self) -> int:
+        """时间止损: 持仓 N 个交易日仍未回本 -> 提醒平仓 (回测 126)"""
+        return self._int("leaps_time_stop_trading_days", "LEAPS_TIME_STOP_TRADING_DAYS", 126)
 
-    # 每日 16:30 日报模式
-    DAILY_REPORT_MODES = ("off", "ndx_grid")
+    def get_dte_force_days(self) -> int:
+        """DTE 强制平仓: 距到期 N 个自然日强制提醒 (沿用早期 app 的 180)"""
+        return self._int("leaps_dte_force_days", "LEAPS_DTE_FORCE_DAYS", 180)
+
+    def get_add_levels(self) -> list:
+        """加仓回撤档位列表 (相对 signal_base_price), 默认 -10% / -20%"""
+        raw = None
+        try:
+            raw = self._db_config.get("leaps_add_levels")
+        except Exception:
+            raw = None
+        if not raw:
+            raw = os.getenv("LEAPS_ADD_LEVELS", "0.10,0.20")
+        levels = []
+        for part in str(raw).split(","):
+            try:
+                v = float(part.strip())
+                if v > 0:
+                    levels.append(v)
+            except ValueError:
+                continue
+        return levels or [0.10, 0.20]
+
+    def get_max_quantity(self) -> int:
+        """单信号最大张数 (首张 + 加仓), 默认 3"""
+        v = self._int("leaps_max_quantity", "LEAPS_MAX_QUANTITY", 3)
+        return max(1, v)
+
+    def get_target_delta(self) -> float:
+        """建议 Delta (回测 0.60-0.70 差异小, 取 0.65)"""
+        return self._float("leaps_target_delta", "LEAPS_TARGET_DELTA", 0.65)
+
+    def get_target_tenor_days(self) -> int:
+        """建议期限 (自然日, 默认约 2 年 = 730)"""
+        return self._int("leaps_target_tenor_days", "LEAPS_TARGET_TENOR_DAYS", 730)
+
+    # ---- 每日 16:30 日报模式 ----
+    DAILY_REPORT_MODES = ("off", "leaps")
 
     def get_daily_report_mode(self) -> str:
         """
-        每日日报模式配置。
-        优先级: DB configuration.daily_report_mode > 环境变量 DAILY_REPORT_MODE > 'ndx_grid'。
-        历史 'legacy' 值归一化为 'ndx_grid' (删除 legacy 日报路径后的安全迁移, 不改历史数据)。
-        NULL / 缺失 / 非法值一律回退默认 'ndx_grid'。
+        日报模式。优先级: DB > env > 'leaps'。
+        历史 'ndx_grid' / 'legacy' 值归一化为 'leaps' (策略已切换)。
         """
         value = self._db_config.get("daily_report_mode")
-        if value == "legacy":
-            # 历史配置兼容: legacy 日报已删除, 读取层归一化为 NDX Grid 日报
-            return "ndx_grid"
         if value in self.DAILY_REPORT_MODES:
             return value
         value = os.getenv("DAILY_REPORT_MODE", "")
-        if value == "legacy":
-            return "ndx_grid"
         if value in self.DAILY_REPORT_MODES:
             return value
-        return "ndx_grid"
+        return "leaps"
 
-
-    # ---- 网格风险/成本参数 (用于 rules 页与日报的风险速算展示) ----
-    # 交易所手续费与资金费: MEXC 等平台可为零手续费, 但资金费仍需计入。
-    def get_grid_maker_fee_pct(self) -> float:
-        if self._db_config.get("grid_maker_fee_pct") is not None:
-            return float(self._db_config["grid_maker_fee_pct"])
-        return float(os.getenv("GRID_MAKER_FEE_PCT", "0.0"))
-
-    def get_grid_taker_fee_pct(self) -> float:
-        if self._db_config.get("grid_taker_fee_pct") is not None:
-            return float(self._db_config["grid_taker_fee_pct"])
-        return float(os.getenv("GRID_TAKER_FEE_PCT", "0.0"))
-
-    def get_funding_rate_pct_8h(self) -> float:
-        """每 8 小时资金费 (正数=多头付费), 单位 %. 缺失按 0 处理。"""
-        if self._db_config.get("funding_rate_pct_8h") is not None:
-            return float(self._db_config["funding_rate_pct_8h"])
-        return float(os.getenv("FUNDING_RATE_PCT_8H", "0.0"))
-
-    # ---- WAITING 周期生命周期 ----
+    # ---- WAITING 信号生命周期 ----
     def get_waiting_ttl_trading_days(self) -> int:
-        """
-        WAITING 周期在多少个交易日后自动过期 (EXPIRED)。
-
-        0 / 负数 / 非法值 => 关闭 TTL (WAITING 永不过期, 行为与历史版本一致)。
-        """
-        raw = self._db_config.get("waiting_ttl_trading_days")
-        if raw is None:
-            raw = os.getenv("WAITING_TTL_TRADING_DAYS", "3")
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            return 3
-        return max(0, value)
+        """WAITING 建议在多少个交易日后自动过期 (0 = 永不过期)"""
+        return self._int("waiting_ttl_trading_days", "WAITING_TTL_TRADING_DAYS", 3)
 
 
 def get_config(db_config: Optional[dict] = None) -> Config:
@@ -121,8 +122,6 @@ def get_config(db_config: Optional[dict] = None) -> Config:
 def load_config_from_db(db) -> Config:
     """
     从 DB `configuration` 行构造运行时配置 (与 app.main 启动时/保存后的配置同源)。
-
-    用于无全局状态的调用点 (服务层/定时任务/页面) 读取 DB 覆盖的配置项:
     任何异常都退回仅环境变量的配置, 不抛出。
     """
     try:
@@ -135,6 +134,13 @@ def load_config_from_db(db) -> Config:
             "wechat_webhook_url": row.wechat_webhook_url,
             "alert_log_retention_days": row.alert_log_retention_days,
             "daily_report_mode": getattr(row, "daily_report_mode", None),
+            "leaps_tp_rsi": getattr(row, "leaps_tp_rsi", None),
+            "leaps_time_stop_trading_days": getattr(row, "leaps_time_stop_trading_days", None),
+            "leaps_dte_force_days": getattr(row, "leaps_dte_force_days", None),
+            "leaps_add_levels": getattr(row, "leaps_add_levels", None),
+            "leaps_max_quantity": getattr(row, "leaps_max_quantity", None),
+            "leaps_target_delta": getattr(row, "leaps_target_delta", None),
+            "leaps_target_tenor_days": getattr(row, "leaps_target_tenor_days", None),
         })
     except Exception:
         return get_config()

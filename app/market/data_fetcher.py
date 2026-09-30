@@ -67,26 +67,26 @@ def _closed_bar_indicators(clean_df: pd.DataFrame, live_bar_is_provisional: bool
 class DataFetcher:
     def __init__(self):
         # 缓存机制，避免频繁请求 yfinance 导致被封禁
-        self._ndx_cache = None
-        self._ndx_cache_time = 0.0
+        self._qqq_cache = None
+        self._qqq_cache_time = 0.0
         # 缓存对应的"最近交易日": 交易日切换后缓存立即失效, 避免长跑进程
         # 在收盘后永久返回上一交易日的缓存数据
-        self._ndx_cache_trading_day = None
+        self._qqq_cache_trading_day = None
 
     def _cache_still_current(self) -> bool:
         """缓存是否属于当前最近交易日 (跨交易日/长假后自动失效)。"""
-        if not self._ndx_cache:
+        if not self._qqq_cache:
             return False
         try:
             from app.scheduler.trading_hours import get_latest_trading_day
             latest = get_latest_trading_day()
         except Exception:
             return True  # 日历不可用时不做额外约束, 退回原有 60s/收盘缓存语义
-        return latest is not None and latest == self._ndx_cache_trading_day
+        return latest is not None and latest == self._qqq_cache_trading_day
 
-    def get_ndx_data(self) -> Dict[str, Any]:
+    def get_qqq_data(self) -> Dict[str, Any]:
         """
-        获取 Nasdaq-100 (^NDX) 价格及技术指标。
+        获取 QQQ (纳指100ETF) 价格及技术指标。
 
         获取至少 2 年历史数据 (period="2y")，以安全支撑 SMA200 及倒数第 253 个交易日 (约一年前) 的价格计算。
         """
@@ -97,42 +97,37 @@ class DataFetcher:
         # 智能防封禁缓存逻辑 (按交易日失效)
         if self._cache_still_current():
             if not is_market_open_now():
-                logger.debug("[CACHE] Market is closed, using cached NDX data for the same trading day")
-                return self._ndx_cache
-            elif current_time - self._ndx_cache_time < 60:
-                logger.debug("[CACHE] Market is open, using 60s cached NDX data")
-                return self._ndx_cache
+                logger.debug("[CACHE] Market is closed, using cached QQQ data for the same trading day")
+                return self._qqq_cache
+            elif current_time - self._qqq_cache_time < 60:
+                logger.debug("[CACHE] Market is open, using 60s cached QQQ data")
+                return self._qqq_cache
 
         df = None
 
         # Level 1: YFinance (Primary) - period="2y"
         try:
-            ticker = yf.Ticker("^NDX")
+            ticker = yf.Ticker("QQQ")
             df = ticker.history(period="2y")
 
             if df is not None and not df.empty:
-                logger.info(f"[INFO] Successfully fetched ^NDX history from yfinance ({len(df)} rows)")
+                logger.info(f"[INFO] Successfully fetched QQQ history from yfinance ({len(df)} rows)")
             else:
-                logger.warning("[WARN] yfinance returned empty ^NDX history")
+                logger.warning("[WARN] yfinance returned empty QQQ history")
                 df = None
         except Exception as e:
-            logger.error(f"[ERROR] yfinance ^NDX history failed: {e}")
+            logger.error(f"[ERROR] yfinance QQQ history failed: {e}")
             df = None
 
-        # Level 2: Fallback (Graceful fallback)
-        if df is None:
-            logger.info("[FALLBACK] Attempting fallback for ^NDX...")
-            pass
-
         if df is not None and not df.empty:
-            result = self._process_ndx_df(df)
+            result = self._process_qqq_df(df)
             if result:
-                self._ndx_cache = result
-                self._ndx_cache_time = current_time
+                self._qqq_cache = result
+                self._qqq_cache_time = current_time
                 try:
-                    self._ndx_cache_trading_day = get_latest_trading_day()
+                    self._qqq_cache_trading_day = get_latest_trading_day()
                 except Exception:
-                    self._ndx_cache_trading_day = None
+                    self._qqq_cache_trading_day = None
             return result
 
         return {}
@@ -141,7 +136,7 @@ class DataFetcher:
         """
         获取辅助市场宽度指标 (S&P 500 / VIX), 仅用于每日简报展示。
 
-        定位: 辅助指标。任何一项获取失败都不抛出异常、不阻塞 NDX Grid 主流程,
+        定位: 辅助指标。任何一项获取失败都不抛出异常、不阻塞 LEAPS 主流程,
         缺失项以 None 表示 (日报渲染为 N/A)。
         """
         result: Dict[str, Any] = {"sp500": None, "vix": None}
@@ -169,9 +164,9 @@ class DataFetcher:
 
         return result
 
-    def _process_ndx_df(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def _process_qqq_df(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        处理 ^NDX DataFrame 并计算相关指标。
+        处理 QQQ DataFrame 并计算相关指标。
 
         盘中时段最后一根日K是"未收盘"的实时 bar, 因此显式标记
         `live_bar_is_provisional=True`, 由指标层额外算出一套**已收盘 bar**
@@ -185,18 +180,18 @@ class DataFetcher:
             provisional = False
 
         return self.calculate_technical_indicators(
-            df, ticker="^NDX", live_bar_is_provisional=provisional
+            df, ticker="QQQ", live_bar_is_provisional=provisional
         )
 
     @staticmethod
-    def calculate_technical_indicators(df: pd.DataFrame, ticker: str = "^NDX",
+    def calculate_technical_indicators(df: pd.DataFrame, ticker: str = "QQQ",
                                        live_bar_is_provisional: bool = False) -> Dict[str, Any]:
         """
         纯指标计算函数。
 
         参数:
             df: 包含 Close, High, Low, Volume 的日K线 DataFrame
-            ticker: 标的代码，默认 ^NDX
+            ticker: 标的代码，默认 QQQ
             live_bar_is_provisional: 最后一根 bar 是否为"盘中未收盘"的实时 bar。
                 True 时会额外输出一组 `closed_*` 指标 (基于最后一根**已收盘** bar),
                 供开仓信号判定使用, 避免盘中噪声制造假信号。

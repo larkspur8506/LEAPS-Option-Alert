@@ -30,12 +30,12 @@ from app.admin.security import (
     LOGIN_GLOBAL_MAX_FAILURES,
 )
 from app.alerts.alert_log import count_alerts_today
-from app.api.grid_api import router as grid_api_router
-from app.services import grid_service
+from app.api.leaps_api import router as leaps_api_router
+from app.services import leaps_service
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="NDX Grid Alert System")
+app = FastAPI(title="QQQ LEAPS Alert System")
 
 # 签名会话 Cookie (替代历史静态 admin_logged_in=true, 后者可被任意伪造)
 app.add_middleware(
@@ -47,7 +47,7 @@ app.add_middleware(
     https_only=cookie_secure_enabled(),
 )
 
-app.include_router(grid_api_router)
+app.include_router(leaps_api_router)
 
 
 def _configured_setup_token() -> str:
@@ -78,6 +78,22 @@ data_fetcher: Optional[DataFetcher] = None
 config: Optional[get_config] = None
 
 
+def _build_config_dict(config_db: Configuration) -> dict:
+    """DB Configuration 行 -> Config 字典 (LEAPS 全部参数)。"""
+    return {
+        "wechat_webhook_url": config_db.wechat_webhook_url,
+        "alert_log_retention_days": config_db.alert_log_retention_days,
+        "daily_report_mode": getattr(config_db, 'daily_report_mode', None),
+        "leaps_tp_rsi": getattr(config_db, 'leaps_tp_rsi', None),
+        "leaps_time_stop_trading_days": getattr(config_db, 'leaps_time_stop_trading_days', None),
+        "leaps_dte_force_days": getattr(config_db, 'leaps_dte_force_days', None),
+        "leaps_add_levels": getattr(config_db, 'leaps_add_levels', None),
+        "leaps_max_quantity": getattr(config_db, 'leaps_max_quantity', None),
+        "leaps_target_delta": getattr(config_db, 'leaps_target_delta', None),
+        "leaps_target_tenor_days": getattr(config_db, 'leaps_target_tenor_days', None),
+    }
+
+
 @app.on_event("startup")
 async def startup_event():
     global data_fetcher, config
@@ -98,13 +114,7 @@ async def startup_event():
 
         db.refresh(config_db)
 
-        config_dict = {
-            "wechat_webhook_url": config_db.wechat_webhook_url,
-            "alert_log_retention_days": config_db.alert_log_retention_days,
-            "daily_report_mode": getattr(config_db, 'daily_report_mode', None),
-        }
-
-        config = get_config(config_dict)
+        config = get_config(_build_config_dict(config_db))
 
         data_fetcher = DataFetcher()
 
@@ -121,7 +131,7 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
-    return {"message": "NDX Grid Alert System", "status": "running"}
+    return {"message": "QQQ LEAPS Alert System", "status": "running"}
 
 
 @app.get("/health")
@@ -154,24 +164,24 @@ async def health_detailed(db: Session = Depends(get_db)):
         "status": "running" if scheduler.running else "stopped"
     }
 
-    # Check NDX market data source
+    # Check QQQ market data source
     if data_fetcher:
         try:
-            ndx_data = data_fetcher.get_ndx_data()
-            results["components"]["ndx_data"] = {
-                "status": "ok" if ndx_data.get("last_price") else "no_data"
+            qqq_data = data_fetcher.get_qqq_data()
+            results["components"]["qqq_data"] = {
+                "status": "ok" if qqq_data.get("last_price") else "no_data"
             }
         except Exception as e:
-            results["components"]["ndx_data"] = {"status": "error", "message": str(e)}
+            results["components"]["qqq_data"] = {"status": "error", "message": str(e)}
             results["status"] = "degraded"
 
-    # Check grid cycles
+    # Check option positions
     try:
-        from app.database.models import GridCycle
-        count = db.query(GridCycle).count()
-        results["components"]["grid_cycles"] = {"status": "ok", "count": count}
+        from app.database.models import OptionPosition
+        count = db.query(OptionPosition).count()
+        results["components"]["option_positions"] = {"status": "ok", "count": count}
     except Exception as e:
-        results["components"]["grid_cycles"] = {"status": "error", "message": str(e)}
+        results["components"]["option_positions"] = {"status": "error", "message": str(e)}
 
     return results
 
@@ -281,15 +291,13 @@ async def logout(request: Request):
 
 def verify_admin_cookie(request: Request):
     """
-    管理员会话校验 (保留历史函数名, 供页面与 grid_api 复用)。
+    管理员会话校验 (保留历史函数名, 供页面与 leaps_api 复用)。
 
     两条合法路径 (均为服务端签名, 客户端无法伪造):
       1. starlette SessionMiddleware 会话 (`request.session["admin"] is True`),
          由 /admin/login 登录成功后写入 —— 浏览器主路径;
       2. 直接携带 itsdangerous 签名 token 的调用方 (API/脚本/测试),
          用与登录同一密钥校验。
-
-    历史实现只比较明文 `admin_logged_in == "true"`, 任意人手工造 Cookie 即可通过。
     """
     try:
         if request.session.get("admin") is True:
@@ -309,34 +317,53 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
 
     market_open = is_market_open_now()
 
-    # NDX Grid 数据: 复用 grid_service dashboard 聚合 (Phase 1-3 函数)
-    grid_dash = grid_service.get_grid_dashboard(db, data_fetcher.get_ndx_data() if data_fetcher else None)
-    ndx = grid_dash["ndx"]
-    latest_cycles = grid_service.get_cycle_history(db, 1)["cycles"]
-    latest_cycle = latest_cycles[0] if latest_cycles else None
+    # QQQ + 仓位聚合 (与 /api/leaps/status 同源)
+    qqq_data = data_fetcher.get_qqq_data() if data_fetcher else None
+    leaps_dash = leaps_service.get_leaps_dashboard(db, qqq_data)
+    qqq = leaps_dash["qqq"] or {}
+    waiting = leaps_dash["waiting_position"]
+    holding = leaps_dash["holding_position"]
 
     return templates.TemplateResponse(request=request, name="dashboard.html", context={
         "request": request,
         "today_logs": today_logs,
         "market_open": market_open,
-        "grid_dash": grid_dash,
-        "ndx": ndx,
-        "latest_cycle": latest_cycle,
+        "leaps_dash": leaps_dash,
+        "qqq": qqq,
+        "waiting": waiting,
+        "holding": holding,
     })
 
 
-@app.get("/admin/grid", response_class=HTMLResponse)
-async def grid_page(request: Request, db: Session = Depends(get_db)):
+@app.get("/admin/positions", response_class=HTMLResponse)
+async def positions_page(request: Request, db: Session = Depends(get_db)):
     if not verify_admin_cookie(request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    grid_dash = grid_service.get_grid_dashboard(db, data_fetcher.get_ndx_data() if data_fetcher else None)
-    history = grid_service.get_cycle_history(db, 20)
+    qqq_data = data_fetcher.get_qqq_data() if data_fetcher else None
+    leaps_dash = leaps_service.get_leaps_dashboard(db, qqq_data)
+    rows = leaps_service.get_position_history(db, 20)["positions"]
+    history = {"positions": [
+        {
+            "id": r.id,
+            "status": r.status,
+            "signal_base_price": r.signal_base_price,
+            "strike": r.strike,
+            "expiration_date": r.expiration_date.isoformat() if r.expiration_date else None,
+            "quantity": r.quantity,
+            "entry_price": r.entry_price,
+            "total_cost": r.total_cost,
+            "close_premium": r.close_premium,
+            "close_reason": r.close_reason,
+            "created_at": str(r.created_at)[:19] if r.created_at else None,
+            "closed_at": str(r.closed_at)[:19] if r.closed_at else None,
+        } for r in rows
+    ]}
 
-    return templates.TemplateResponse(request=request, name="grid.html", context={
+    return templates.TemplateResponse(request=request, name="positions.html", context={
         "request": request,
-        "grid_dash": grid_dash,
-        "history": history
+        "leaps_dash": leaps_dash,
+        "history": history,
     })
 
 
@@ -345,12 +372,7 @@ def refresh_global_config(db: Session):
     config_db = db.query(Configuration).first()
     if not config_db:
         return config if config is not None else get_config()
-    config_dict = {
-        "wechat_webhook_url": config_db.wechat_webhook_url,
-        "alert_log_retention_days": config_db.alert_log_retention_days,
-        "daily_report_mode": getattr(config_db, 'daily_report_mode', None),
-    }
-    config = get_config(config_dict)
+    config = get_config(_build_config_dict(config_db))
     return config
 
 
@@ -362,32 +384,70 @@ async def rules(request: Request, db: Session = Depends(get_db)):
     # 刷新并获取运行时配置 (确保包含 DB 最新保存值)
     runtime_config = refresh_global_config(db)
 
-    # 风险/成本速算 (只读展示; NDX 数据不可用时按方向参数估算)
-    risk_snapshot = None
-    try:
-        ndx = data_fetcher.get_ndx_data() if data_fetcher else None
-    except Exception:
-        ndx = None
-    try:
-        risk_snapshot = grid_service.get_risk_snapshot(runtime_config, ndx_data=ndx)
-    except Exception:
-        risk_snapshot = None
-
     return templates.TemplateResponse(request=request, name="rules.html", context={
         "request": request,
-        # NDX Grid 策略参数: 以后端配置为唯一来源 (env/DB), 前端只展示
-        "grid_rsi_threshold": runtime_config.get_rsi_threshold(),
-        "grid_upper_pct": runtime_config.get_default_grid_upper_pct(),
-        "grid_lower_pct": runtime_config.get_default_grid_lower_pct(),
-        "grid_count": runtime_config.get_default_grid_count(),
-        "grid_leverage": runtime_config.get_default_grid_leverage(),
-        # 每日日报模式 (运行时配置, 默认 ndx_grid)
-        "daily_report_mode": runtime_config.get_daily_report_mode(),
-        # WAITING 存活期 (交易日) 与风险速算
+        # LEAPS 策略参数: 以后端配置为唯一来源 (env/DB), 前端展示 + 可编辑
+        "entry_rsi": runtime_config.get_entry_rsi_threshold(),
+        "tp_rsi": runtime_config.get_tp_rsi(),
+        "time_stop_days": runtime_config.get_time_stop_trading_days(),
+        "dte_force_days": runtime_config.get_dte_force_days(),
+        "add_levels": ",".join(f"{v:.2f}".rstrip("0").rstrip(".") for v in runtime_config.get_add_levels()),
+        "max_quantity": runtime_config.get_max_quantity(),
+        "target_delta": runtime_config.get_target_delta(),
+        "target_tenor_days": runtime_config.get_target_tenor_days(),
         "waiting_ttl_trading_days": runtime_config.get_waiting_ttl_trading_days(),
-        "risk_snapshot": risk_snapshot,
+        # 每日日报模式 (运行时配置, 默认 leaps)
+        "daily_report_mode": runtime_config.get_daily_report_mode(),
         "report_saved": request.query_params.get("saved") == "1",
     })
+
+
+def _parse_float(value: Optional[str], default: float) -> float:
+    try:
+        v = float(str(value).strip())
+        return v
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_int(value: Optional[str], default: int) -> int:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+@app.post("/admin/rules/strategy")
+async def update_strategy(
+    request: Request,
+    tp_rsi: str = Form(...),
+    time_stop_days: str = Form(...),
+    dte_force_days: str = Form(...),
+    add_levels: str = Form("0.10,0.20"),
+    max_quantity: str = Form("3"),
+    target_delta: str = Form("0.65"),
+    target_tenor_days: str = Form("730"),
+    db: Session = Depends(get_db),
+):
+    """保存 LEAPS 策略参数 (后台可调; 数值非法时后端静默回退当前值)。"""
+    if not verify_admin_cookie(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    config_db = db.query(Configuration).first()
+    if config_db:
+        current = get_config(_build_config_dict(config_db))
+        config_db.leaps_tp_rsi = _parse_float(tp_rsi, current.get_tp_rsi())
+        config_db.leaps_time_stop_trading_days = _parse_int(time_stop_days, current.get_time_stop_trading_days())
+        config_db.leaps_dte_force_days = _parse_int(dte_force_days, current.get_dte_force_days())
+        config_db.leaps_add_levels = str(add_levels).strip() or "0.10,0.20"
+        config_db.leaps_max_quantity = max(1, _parse_int(max_quantity, current.get_max_quantity()))
+        config_db.leaps_target_delta = _parse_float(target_delta, current.get_target_delta())
+        config_db.leaps_target_tenor_days = _parse_int(target_tenor_days, current.get_target_tenor_days())
+        db.commit()
+        refresh_global_config(db)
+        logger.info("[INFO] LEAPS strategy params updated")
+
+    return RedirectResponse(url="/admin/rules?saved=1", status_code=303)
 
 
 @app.post("/admin/rules/daily-report-mode")
@@ -396,22 +456,22 @@ async def update_daily_report_mode(
     daily_report_mode: str = Form(...),
     db: Session = Depends(get_db)
 ):
-    """保存每日 16:30 日报模式 (off / ndx_grid)"""
+    """保存每日 16:30 日报模式 (off / leaps)"""
     if not verify_admin_cookie(request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    if daily_report_mode == "legacy":
-        # 历史配置兼容: legacy 日报已删除, 归一化为 ndx_grid
-        daily_report_mode = "ndx_grid"
-    if daily_report_mode not in ("off", "ndx_grid"):
-        daily_report_mode = "ndx_grid"  # 非法值回退默认
+    if daily_report_mode in ("legacy", "ndx_grid"):
+        # 历史配置兼容: 网格日报已下线, 归一化为 leaps
+        daily_report_mode = "leaps"
+    if daily_report_mode not in ("off", "leaps"):
+        daily_report_mode = "leaps"  # 非法值回退默认
 
     config_db = db.query(Configuration).first()
     if config_db:
         config_db.daily_report_mode = daily_report_mode
         db.commit()
         refresh_global_config(db)
-        print(f"[INFO] Daily report mode updated to: {daily_report_mode}")
+        logger.info(f"[INFO] Daily report mode updated to: {daily_report_mode}")
 
     return RedirectResponse(url="/admin/rules?saved=1", status_code=303)
 
