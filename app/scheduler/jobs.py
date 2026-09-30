@@ -50,6 +50,22 @@ def cleanup_old_data(db, config):
     logger.info(f"Deleted {deleted_alerts} old alert logs")
 
 
+def _is_qqq_data_fresh(qqq_data) -> bool:
+    """日报用的新鲜度判定: 与 leaps_monitor._is_data_fresh 同口径 (日 K 落后最近交易日即过期)。"""
+    if not isinstance(qqq_data, dict) or not qqq_data.get("data_timestamp"):
+        return False
+    try:
+        import pandas as pd
+        data_date = pd.Timestamp(qqq_data["data_timestamp"]).date()
+        from app.scheduler.trading_hours import get_latest_trading_day
+        now_et = get_current_time_et()
+        latest = get_latest_trading_day(now_et)
+        return latest is not None and data_date >= latest
+    except Exception as e:
+        logger.warning(f"[DAILY_REPORT] freshness check failed, assume stale: {e}")
+        return False
+
+
 def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date: str):
     """QQQ LEAPS 每日简报 (16:30 ET)。复用 leaps dashboard 聚合, 只做展示格式化。"""
     from app.services import leaps_service
@@ -63,9 +79,9 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
         logger.warning(f"DAILY_REPORT qqq data fetch failed: {e}")
         qqq_data = None
 
-    # 日报涨跌幅: 注入 prev_close (辅助展示, 缺失时日报不显示涨跌幅)
+    # 数据新鲜度在聚合层统一计算 (dashboard/日报/API 共用同一口径)
     if isinstance(qqq_data, dict):
-        qqq_data["prev_close"] = qqq_data.get("prev_close")
+        qqq_data["is_data_fresh"] = _is_qqq_data_fresh(qqq_data)
 
     # 辅助市场指标 (S&P 500 / VIX): 缺失/失败不阻塞日报, 日报渲染 N/A
     try:

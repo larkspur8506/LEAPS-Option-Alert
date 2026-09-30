@@ -319,6 +319,12 @@ async def dashboard(request: Request, db: Session = Depends(get_db)):
 
     # QQQ + 仓位聚合 (与 /api/leaps/status 同源)
     qqq_data = data_fetcher.get_qqq_data() if data_fetcher else None
+    if isinstance(qqq_data, dict):
+        from app.alerts.leaps_monitor import _is_data_fresh
+        try:
+            qqq_data["is_data_fresh"] = _is_data_fresh(qqq_data)
+        except Exception:
+            qqq_data["is_data_fresh"] = False
     leaps_dash = leaps_service.get_leaps_dashboard(db, qqq_data)
     qqq = leaps_dash["qqq"] or {}
     waiting = leaps_dash["waiting_position"]
@@ -341,6 +347,12 @@ async def positions_page(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/admin/login", status_code=302)
 
     qqq_data = data_fetcher.get_qqq_data() if data_fetcher else None
+    if isinstance(qqq_data, dict):
+        from app.alerts.leaps_monitor import _is_data_fresh
+        try:
+            qqq_data["is_data_fresh"] = _is_data_fresh(qqq_data)
+        except Exception:
+            qqq_data["is_data_fresh"] = False
     leaps_dash = leaps_service.get_leaps_dashboard(db, qqq_data)
     rows = leaps_service.get_position_history(db, 20)["positions"]
     history = {"positions": [
