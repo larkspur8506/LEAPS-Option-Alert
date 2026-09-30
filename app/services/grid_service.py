@@ -12,8 +12,10 @@ State transitions are delegated to the Phase 2 state machine
 (app/alerts/grid_cycle.py). This layer only maps outcomes to
 domain errors; it never duplicates the state machine.
 """
+import functools
 import logging
 import math
+import threading
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -33,6 +35,27 @@ from app.config import load_config_from_db, get_config
 from app.database.models import GridCycle
 
 logger = logging.getLogger(__name__)
+
+# 状态迁移串行化锁。
+# 场景: 双击 / HTTP 重试 / 两个线程同时对同一 cycle 发起 start, 会让
+# "检查是否已有 RUNNING" 与 "写入 RUNNING" 之间出现竞争窗口, 轻则状态不一致,
+# 重则出现两个 RUNNING 周期 (SQLite 单连接下还会抛
+# "cannot start a transaction within a transaction")。
+# 本应用按 --workers 1 单进程多线程部署, 进程内锁即可覆盖; 多进程/多副本场景
+# 需要把互斥下沉到数据库 (唯一索引或事务级锁)。
+_STATE_LOCK = threading.RLock()
+
+
+def _serialized(func):
+    """将状态迁移函数串行化执行 (进程内 RLock)。"""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _STATE_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper
+
 
 MANUAL_CLOSE_REASON = "MANUAL_CLOSE"
 DEFAULT_HISTORY_LIMIT = 50
@@ -203,6 +226,7 @@ def validate_actual_params(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+@_serialized
 def start_cycle(db: Session, cycle_id: int, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     WAITING -> RUNNING (用户确认已在交易所实际开网格)。
@@ -245,6 +269,7 @@ def start_cycle(db: Session, cycle_id: int, params: Dict[str, Any]) -> Dict[str,
     return serialize_cycle(started)
 
 
+@_serialized
 def close_running_cycle(db: Session, cycle_id: int) -> Dict[str, Any]:
     """
     RUNNING -> CLOSED / MANUAL_CLOSE (记录用户已手动结束网格)。
@@ -292,6 +317,7 @@ def get_waiting_ttl_state(db: Session, cycle_id: Optional[int] = None) -> Option
     return waiting_ttl_state(cycle, ttl_days)
 
 
+@_serialized
 def dismiss_waiting_cycle(db: Session, cycle_id: int, reason: str = "MANUAL_DISMISS") -> Dict[str, Any]:
     """
     WAITING -> DISMISSED: 人工忽略这条开仓建议 (终态, 释放信号闸门)。
