@@ -1,6 +1,6 @@
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from .trading_hours import is_trading_time, get_current_time_et, is_trading_day
@@ -138,7 +138,13 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
     notifier = get_wechat_notifier(webhook)
 
     # 去重 (两道): 内存态 (同进程) + 落库态 (跨重启, 修复"16:30 后重启当天重发日报")
-    already_sent_today = alerted_within(db, "NDX_GRID_DAILY_REPORT", 24 * 3600)
+    # 落库闸门以"美东自然日"为界: 若用滚动 24 小时窗口, 昨天的日报(约 24 小时前)
+    # 会被判成"今天已发", 导致隔天漏发日报。
+    day_start_et = get_current_time_et().replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start_utc = day_start_et.astimezone(timezone.utc).replace(tzinfo=None)
+    already_sent_today = alerted_within(
+        db, "NDX_GRID_DAILY_REPORT", since_utc=day_start_utc
+    )
     if not already_sent_today and dedup.should_alert("DAILY_REPORT"):
         # 先格式化完整日报文本 (与企业微信实际发送内容相同的唯一来源)
         formatted_message = notifier.format_ndx_grid_report(report_data)

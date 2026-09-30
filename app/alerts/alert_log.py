@@ -75,20 +75,28 @@ def count_alerts_today(db, alert_type: Optional[str] = None, now_utc: Optional[d
         return 0
 
 
-def alerted_within(db, alert_type: str, within_seconds: int,
+def alerted_within(db, alert_type: str, within_seconds: Optional[int] = None,
                    cycle_id: Optional[int] = None,
-                   now_utc: Optional[datetime] = None) -> bool:
+                   now_utc: Optional[datetime] = None,
+                   since_utc: Optional[datetime] = None) -> bool:
     """
     落库级去重查询: 指定时间窗内是否已存在同类型(且同 cycle)的告警记录。
 
     用于进程重启后仍然生效的去重 (内存态 dedup 在重启后会丢失):
     - 日报: within_seconds=86400, cycle_id=None -> 当天是否已发过
     - 止损提醒/破位提醒: 传 cycle_id, within_seconds 取足够大的窗口
+
+    也可以通过 `since_utc` 直接给定窗起点 (例如"美东当天 00:00 对应的 UTC 时刻")。
+    日报这类"按自然日"去重必须用 since_utc: 滚动 24 小时窗口会把"上一次日报"
+    (恰好约 24 小时前) 误判为已发送, 导致隔天漏发。
     """
     from app.database.models import AlertLog
 
     now = now_utc or utcnow_naive()
-    since = now - timedelta(seconds=max(1, int(within_seconds)))
+    if since_utc is not None:
+        since = since_utc
+    else:
+        since = now - timedelta(seconds=max(1, int(within_seconds or 0)))
     query = db.query(AlertLog).filter(
         AlertLog.alert_type == alert_type,
         AlertLog.triggered_at >= since,

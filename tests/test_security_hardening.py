@@ -607,5 +607,76 @@ class TestAlertLogLayer(BaseTest):
         self.assertEqual(row.error_message, "webhook down")
 
 
+class TestDailyReportDedupWindow(BaseTest):
+    """
+    日报落库去重必须按"美东自然日"判定。
+
+    历史实现用滚动 24 小时窗口: 上一次日报恰好约 24 小时前, 会被判成
+    "今天已发送" -> 隔天漏发日报 (线上 16:30 定时任务最典型的翻车方式)。
+    """
+
+    def setUp(self):
+        super().setUp()
+        from app.config import Config
+
+        self.mock_fetcher = MagicMock()
+        self.mock_fetcher.get_ndx_data.return_value = {
+            "ticker": "^NDX", "is_data_valid": True, "last_price": 25000.0, "rsi": 30.0,
+            "ma200": 19000.0, "is_above_sma200_3d": True, "price_1y_ago": 18000.0,
+            "data_timestamp": str(datetime.now(et_tz)),
+        }
+        self.config = Config({
+            "daily_report_mode": "ndx_grid",
+            "wechat_webhook_url": "https://mock.webhook/key=SECRET",
+        })
+
+    def _send(self, previous_report_utc=None, clear_memory_dedup=True):
+        from app.scheduler.jobs import send_daily_report_job
+        from app.alerts import dedup as dedup_module
+
+        if clear_memory_dedup:
+            dedup_module.clear_dedup()
+        if previous_report_utc is not None:
+            log_alert(self.db, "NDX_GRID_DAILY_REPORT", "NDX Grid Daily Report",
+                      "previous report", True, triggered_at=previous_report_utc)
+
+        notifier = MagicMock()
+        notifier.send_ndx_grid_report.return_value = True
+        notifier.format_ndx_grid_report.return_value = "report text"
+
+        fixed_now_et = et_tz.localize(datetime(2026, 9, 30, 16, 30, 0))
+        with patch("app.scheduler.jobs.is_trading_day", return_value=True), \
+             patch("app.scheduler.jobs.get_current_time_et", return_value=fixed_now_et), \
+             patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
+            send_daily_report_job(self.mock_fetcher, db=self.db, config=self.config)
+        return notifier
+
+    def test_1_yesterday_report_does_not_block_today(self):
+        """1. 昨天 (美东) 已发日报 -> 今天照常发送 (不能漏发)"""
+        notifier = self._send(previous_report_utc=datetime(2026, 9, 29, 20, 30, 0))
+        notifier.send_ndx_grid_report.assert_called_once()
+
+    def test_2_same_day_report_blocks_duplicate(self):
+        """2. 今天 (美东) 已发日报 -> 同一天第二次不再发送"""
+        notifier = self._send(previous_report_utc=datetime(2026, 9, 30, 12, 0, 0))
+        notifier.send_ndx_grid_report.assert_not_called()
+
+    def test_3_no_previous_report_sends(self):
+        """3. 无历史记录 -> 正常发送"""
+        notifier = self._send(previous_report_utc=None)
+        notifier.send_ndx_grid_report.assert_called_once()
+
+    def test_4_both_gates_agree(self):
+        """4. 落库闸门与内存闸门语义一致 (同一天只发一次, 跨天各发一次)"""
+        # 第一次: 发送并落库
+        notifier = self._send(previous_report_utc=None)
+        notifier.send_ndx_grid_report.assert_called_once()
+        rows = self.db.query(AlertLog).filter(AlertLog.alert_type == "NDX_GRID_DAILY_REPORT").count()
+        self.assertEqual(rows, 1)
+        # 立刻再跑一次 (内存 dedup 生效, 不重置内存态) -> 不重复
+        notifier2 = self._send(previous_report_utc=None, clear_memory_dedup=False)
+        notifier2.send_ndx_grid_report.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
