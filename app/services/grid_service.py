@@ -12,8 +12,10 @@ State transitions are delegated to the Phase 2 state machine
 (app/alerts/grid_cycle.py). This layer only maps outcomes to
 domain errors; it never duplicates the state machine.
 """
+import functools
 import logging
 import math
+import threading
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -23,13 +25,37 @@ from app.alerts.grid_cycle import (
     get_waiting_grid_cycle,
     start_grid_cycle,
     close_grid_cycle,
+    dismiss_waiting_grid_cycle,
+    waiting_ttl_state,
 )
 from app.alerts.grid_math import calculate_theoretical_grid_position
 from app.alerts.ndx_rules import check_ndx_entry_conditions
 from app.alerts.grid_monitor import _is_data_fresh
+from app.config import load_config_from_db, get_config
 from app.database.models import GridCycle
 
 logger = logging.getLogger(__name__)
+
+# 状态迁移串行化锁。
+# 场景: 双击 / HTTP 重试 / 两个线程同时对同一 cycle 发起 start, 会让
+# "检查是否已有 RUNNING" 与 "写入 RUNNING" 之间出现竞争窗口, 轻则状态不一致,
+# 重则出现两个 RUNNING 周期 (SQLite 单连接下还会抛
+# "cannot start a transaction within a transaction")。
+# 本应用按 --workers 1 单进程多线程部署, 进程内锁即可覆盖; 多进程/多副本场景
+# 需要把互斥下沉到数据库 (唯一索引或事务级锁)。
+_STATE_LOCK = threading.RLock()
+
+
+def _serialized(func):
+    """将状态迁移函数串行化执行 (进程内 RLock)。"""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _STATE_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapper
+
 
 MANUAL_CLOSE_REASON = "MANUAL_CLOSE"
 DEFAULT_HISTORY_LIMIT = 50
@@ -46,6 +72,10 @@ class GridCycleStateError(Exception):
 
 class GridParameterError(Exception):
     """实际参数校验失败 (映射为 HTTP 400)"""
+
+
+class GridCycleLifecycleError(Exception):
+    """WAITING 周期的生命周期操作失败 (忽略/过期, 映射为 HTTP 409)"""
 
 
 def _serialize_dt(value: Any) -> Optional[str]:
@@ -196,6 +226,7 @@ def validate_actual_params(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+@_serialized
 def start_cycle(db: Session, cycle_id: int, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     WAITING -> RUNNING (用户确认已在交易所实际开网格)。
@@ -238,6 +269,7 @@ def start_cycle(db: Session, cycle_id: int, params: Dict[str, Any]) -> Dict[str,
     return serialize_cycle(started)
 
 
+@_serialized
 def close_running_cycle(db: Session, cycle_id: int) -> Dict[str, Any]:
     """
     RUNNING -> CLOSED / MANUAL_CLOSE (记录用户已手动结束网格)。
@@ -263,6 +295,152 @@ def close_running_cycle(db: Session, cycle_id: int) -> Dict[str, Any]:
         f"[Grid Service] Cycle {cycle_id} MANUALLY CLOSED at {closed.closed_at}"
     )
     return serialize_cycle(closed)
+
+
+def get_waiting_ttl_state(db: Session, cycle_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """
+    查询 WAITING 周期的 TTL 状态 (只读)。cycle_id 为空时取当前 WAITING 周期。
+
+    返回 None 表示当前没有 WAITING 周期。
+    """
+    cycle = None
+    if cycle_id is not None:
+        cycle = db.query(GridCycle).filter(GridCycle.id == cycle_id).first()
+    else:
+        cycle = get_waiting_grid_cycle(db)
+    if cycle is None:
+        return None
+    try:
+        ttl_days = load_config_from_db(db).get_waiting_ttl_trading_days()
+    except Exception:
+        ttl_days = 0
+    return waiting_ttl_state(cycle, ttl_days)
+
+
+@_serialized
+def dismiss_waiting_cycle(db: Session, cycle_id: int, reason: str = "MANUAL_DISMISS") -> Dict[str, Any]:
+    """
+    WAITING -> DISMISSED: 人工忽略这条开仓建议 (终态, 释放信号闸门)。
+
+    只有 WAITING 状态允许忽略; RUNNING/CLOSED/STOPPED/EXPIRED 均拒绝 (409)。
+    """
+    cycle = db.query(GridCycle).filter(GridCycle.id == cycle_id).first()
+    if not cycle:
+        raise GridCycleNotFoundError(f"GridCycle {cycle_id} not found.")
+
+    if cycle.status != "WAITING":
+        raise GridCycleStateError(
+            f"Cannot dismiss GridCycle {cycle_id}: status is '{cycle.status}', must be 'WAITING'."
+        )
+
+    try:
+        dismissed = dismiss_waiting_grid_cycle(db, cycle_id, reason=reason)
+    except ValueError as e:
+        raise GridCycleStateError(str(e))
+
+    logger.info(f"[Grid Service] Cycle {cycle_id} DISMISSED (reason={reason})")
+    return serialize_cycle(dismissed)
+
+
+def get_risk_snapshot(config: Any = None, cycle: Optional[GridCycle] = None,
+                      ndx_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    风险/成本速算 (只读展示, 不参与任何状态机判定)。
+
+    基于当前策略默认参数 (或传入的 RUNNING 周期实际参数) 计算:
+      - grid_step_pct: 每格价格幅度 (%)
+      - round_trip_fee_pct: 一次买入+卖出的手续费 (%)
+      - net_edge_pct_per_grid: 每格毛利扣除手续费后的净幅度 (%)
+      - fee_ratio_of_step: 手续费占每格毛利的比例 (100% = 白干)
+      - avg_entry_at_full_load / loss_at_lower_pct_of_notional: 满仓均价与打到下轨的浮亏
+      - margin_loss_at_lower_pct: 上述浮亏折算到保证金 (乘杠杆)
+      - est_liquidation_price / distance_to_liquidation_pct: 估算强平价与距离
+      - funding_cost_pct_per_day / funding_cost_pct_30d: 资金费拖累
+
+    所有数字均为**估算**(未计滑点、资金费随行情浮动、交易所强平规则差异)。
+    """
+    cfg = config if config is not None else get_config()
+
+    def _num(getter_name: str, default: float) -> float:
+        try:
+            value = getattr(cfg, getter_name)()
+            return float(value)
+        except Exception:
+            return default
+
+    if cycle is not None:
+        base = cycle.actual_base_price
+        upper = cycle.actual_upper_price
+        lower = cycle.actual_lower_price
+        count = cycle.actual_grid_count
+        leverage = cycle.actual_leverage
+        basis = "ACTUAL_PARAMS"
+    else:
+        base = (ndx_data or {}).get("last_price")
+        upper_pct = _num("get_default_grid_upper_pct", 0.20)
+        lower_pct = _num("get_default_grid_lower_pct", 0.20)
+        count = _num("get_default_grid_count", 200)
+        leverage = _num("get_default_grid_leverage", 5.0)
+        upper = float(base) * (1 + upper_pct) if base else None
+        lower = float(base) * (1 - lower_pct) if base else None
+        basis = "SUGGESTED_PARAMS"
+
+    maker_fee = _num("get_grid_maker_fee_pct", 0.0)
+    taker_fee = _num("get_grid_taker_fee_pct", 0.0)
+    funding_8h = _num("get_funding_rate_pct_8h", 0.0)
+    fee_pct = max(maker_fee, taker_fee)
+
+    snapshot: Dict[str, Any] = {
+        "basis": basis,
+        "base_price": base,
+        "upper_price": upper,
+        "lower_price": lower,
+        "grid_count": count,
+        "leverage": leverage,
+        "fee_pct_per_side": fee_pct,
+        "funding_rate_pct_8h": funding_8h,
+        "note": "ESTIMATE ONLY - 未计滑点/资金费浮动/交易所强平规则差异",
+    }
+
+    try:
+        step = (float(upper) - float(lower)) / float(count)
+        base_price = float(base) if base else float((float(upper) + float(lower)) / 2)
+        step_pct = step / base_price * 100.0
+        round_trip = fee_pct * 2.0
+        snapshot.update({
+            "grid_step": round(step, 4),
+            "grid_step_pct": round(step_pct, 4),
+            "round_trip_fee_pct": round(round_trip, 4),
+            "net_edge_pct_per_grid": round(step_pct - round_trip, 4),
+            "fee_ratio_of_step_pct": round(round_trip / step_pct * 100.0, 1) if step_pct > 0 else None,
+        })
+
+        avg_entry = (float(lower) + base_price) / 2.0
+        loss_notional = (float(lower) - avg_entry) / avg_entry * 100.0
+        snapshot.update({
+            "avg_entry_at_full_load": round(avg_entry, 2),
+            "loss_at_lower_pct_of_notional": round(loss_notional, 2),
+            "margin_loss_at_lower_pct": round(loss_notional * float(leverage), 2),
+        })
+
+        lev = float(leverage) if leverage else 0.0
+        if lev > 0:
+            liq = avg_entry * (1.0 - 1.0 / lev)
+            snapshot.update({
+                "est_liquidation_price": round(liq, 2),
+                "distance_to_liquidation_pct": round((liq - avg_entry) / avg_entry * 100.0, 2),
+                "lower_vs_liquidation_pct": round((float(lower) - liq) / liq * 100.0, 2),
+            })
+
+        if funding_8h:
+            snapshot.update({
+                "funding_cost_pct_per_day": round(funding_8h * 3.0, 4),
+                "funding_cost_pct_30d": round(funding_8h * 3.0 * 30.0, 3),
+            })
+    except (TypeError, ValueError, ZeroDivisionError):
+        snapshot["error"] = "INSUFFICIENT_PARAMS"
+
+    return snapshot
 
 
 def get_grid_dashboard(
@@ -304,6 +482,12 @@ def get_grid_dashboard(
             "is_data_valid": is_valid,
             "data_timestamp": ndx_data.get("data_timestamp"),
             "price_1y_ago": ndx_data.get("price_1y_ago"),
+            # 收盘确认制展示字段 (开仓判定实际使用的基准)
+            "closed_bar_date": ndx_data.get("closed_bar_date"),
+            "closed_rsi": ndx_data.get("closed_rsi"),
+            "closed_price": ndx_data.get("closed_price"),
+            "closed_indicators_available": bool(ndx_data.get("closed_indicators_available")),
+            "live_bar_is_provisional": bool(ndx_data.get("live_bar_is_provisional")),
         })
         if is_valid:
             try:
@@ -364,10 +548,29 @@ def get_grid_dashboard(
                 "detail": "当前 NDX Entry Signal 未满足，因此系统尚未创建 WAITING 周期。",
             }
 
+    # WAITING 的 TTL 状态 (只读展示): 剩余多少个交易日会被自动过期
+    waiting_ttl: Optional[Dict[str, Any]] = None
+    if waiting is not None:
+        try:
+            waiting_ttl = waiting_ttl_state(
+                waiting, load_config_from_db(db).get_waiting_ttl_trading_days()
+            )
+        except Exception:
+            waiting_ttl = None
+
+    # 风险/成本速算 (只读展示, 不参与状态机)
+    risk_snapshot: Optional[Dict[str, Any]] = None
+    try:
+        risk_snapshot = get_risk_snapshot(load_config_from_db(db), cycle=running, ndx_data=ndx_data)
+    except Exception:
+        risk_snapshot = None
+
     return {
         "ndx": ndx,
         "running_cycle": serialize_cycle(running) if running else None,
         "waiting_cycle": serialize_cycle(waiting) if waiting else None,
+        "waiting_ttl": waiting_ttl,
         "theoretical_grid_position": theoretical,
+        "risk_snapshot": risk_snapshot,
         "no_active_info": no_active_info,
     }

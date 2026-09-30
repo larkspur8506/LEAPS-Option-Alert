@@ -23,6 +23,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from tests.support import login_client  # noqa: E402
 from app.database.models import Base, GridCycle, AlertLog
 from app.alerts.grid_cycle import create_waiting_grid_cycle, start_grid_cycle
 from app.alerts.grid_monitor import process_ndx_grid_cycle
@@ -703,7 +704,7 @@ class TestManualCloseNotification(NotificationTestBase):
         app.dependency_overrides[get_db] = lambda: self.db
         self.app = app
         self.client = TestClient(app, follow_redirects=False)
-        self.client.cookies.set("admin_logged_in", "true")
+        login_client(self.client)
 
     def tearDown(self):
         self.client.close()

@@ -35,6 +35,9 @@ def _apply_lightweight_migrations():
     """
     migrations = [
         "ALTER TABLE configuration ADD COLUMN daily_report_mode VARCHAR(20)",
+        "ALTER TABLE alert_logs ADD COLUMN cycle_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_alert_logs_cycle_id ON alert_logs (cycle_id)",
+        "CREATE INDEX IF NOT EXISTS ix_alert_logs_type_time ON alert_logs (alert_type, triggered_at)",
     ]
     with engine.connect() as conn:
         for stmt in migrations:

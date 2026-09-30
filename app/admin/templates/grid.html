@@ -41,7 +41,7 @@
             <span class="w-3 h-3 rounded-full bg-amber-500 animate-pulse"></span>
             <span class="text-lg font-bold tracking-wide text-amber-700">{{ waiting.status }} — ENTRY SIGNAL DETECTED</span>
         </div>
-        <span class="text-xs text-gray-500">GridCycle #{{ waiting.id }} · 创建时间: {{ waiting.created_at[:19].replace("T", " ") if waiting.created_at else "-" }}</span>
+        <span class="text-xs text-gray-500">GridCycle #{{ waiting.id }} · 创建时间: {{ waiting.created_at[:19].replace("T", " ") if waiting.created_at else "-" }}{% set wt = grid_dash.waiting_ttl %}{% if wt and wt.ttl_enabled %} · TTL 剩余 {{ wt.remaining_trading_days }}/{{ wt.ttl_trading_days }} 交易日{% endif %}</span>
     </div>
     {% else %}
     <div class="mb-8 p-5 rounded-2xl border bg-gray-50 border-gray-200 flex items-center gap-3 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
@@ -147,7 +147,18 @@
                     class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
                     确认启动 Grid (录入实际参数)
                 </button>
-                <p class="text-xs text-gray-400 self-center">系统不会自动下单, 不连接任何交易所</p>
+                <button onclick="dismissWaiting({{ waiting.id }})"
+                    class="bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-6 py-3 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
+                    忽略此建议
+                </button>
+                <p class="text-xs text-gray-400 self-center">
+                    系统不会自动下单, 不连接任何交易所
+                    {% set ttl = grid_dash.waiting_ttl %}
+                    {% if ttl and ttl.ttl_enabled %}
+                    <br>未确认将在 <span class="font-semibold text-amber-600">{{ ttl.remaining_trading_days }}</span> 个交易日后自动过期
+                    (已用 {{ ttl.elapsed_trading_days }}/{{ ttl.ttl_trading_days }})
+                    {% endif %}
+                </p>
             </div>
         </div>
     </div>
@@ -411,6 +422,17 @@
     // ---- 关闭弹窗 ----
     function openCloseModal() { $("close-modal").classList.remove("hidden"); }
     function closeCloseModal() { $("close-modal").classList.add("hidden"); }
+
+    // WAITING 人工忽略 (WAITING -> DISMISSED 终态): 不打算开这张网格时释放信号闸门
+    async function dismissWaiting(cycleId) {
+        if (!confirm("确认忽略这条入场建议?\n\n该 WAITING 记录将标记为 DISMISSED (终态),\n之后再次满足入场条件会重新发出建议。")) return;
+        try {
+            const res = await apiFetch(`/api/grid/${cycleId}/dismiss`, { method: "POST" });
+            if (res.ok) { location.reload(); return; }
+            const err = await res.json().catch(() => ({}));
+            alert("忽略失败: " + (err.detail || res.status));
+        } catch (e) { /* apiFetch 已提示 */ }
+    }
 
     async function submitClose(cycleId) {
         if (!cycleId) { showToast("当前没有 RUNNING 网格", "error"); return; }

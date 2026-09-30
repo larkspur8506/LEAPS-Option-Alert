@@ -24,6 +24,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from tests.support import login_client  # noqa: E402
 from app.database.models import Base, GridCycle
 from app.alerts.grid_cycle import create_waiting_grid_cycle
 from app.services import grid_service
@@ -81,7 +82,7 @@ class GridWebUiTestBase(unittest.TestCase):
         app.dependency_overrides[get_db] = lambda: self.db
         self.app = app
         self.client = TestClient(app, follow_redirects=False)
-        self.client.cookies.set("admin_logged_in", "true")
+        login_client(self.client)
 
         self.mock_fetcher = MagicMock()
         self.mock_fetcher.get_ndx_data.return_value = make_ndx_data()

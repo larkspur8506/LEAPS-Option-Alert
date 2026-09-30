@@ -98,3 +98,26 @@ def get_latest_trading_day(dt: Optional[datetime] = None) -> Optional[date]:
 
 def get_current_time_et() -> datetime:
     return datetime.now(et_tz)
+
+
+def count_trading_days(start_et: datetime, end_et: datetime) -> int:
+    """
+    统计 (start_et.date(), end_et.date()] 之间的 NYSE 交易日数量 (不含起始日)。
+
+    用于 WAITING TTL 的"交易日"计数: 周末与全天休市日不消耗确认时间。
+    start >= end 时返回 0。
+    """
+    if start_et is None or end_et is None:
+        return 0
+
+    start_date = start_et.astimezone(et_tz).date() if start_et.tzinfo else start_et.date()
+    end_date = end_et.astimezone(et_tz).date() if end_et.tzinfo else end_et.date()
+
+    if end_date <= start_date:
+        return 0
+
+    schedule = nyse_calendar.schedule(
+        start_date=start_date + timedelta(days=1),
+        end_date=end_date,
+    )
+    return int(len(schedule))

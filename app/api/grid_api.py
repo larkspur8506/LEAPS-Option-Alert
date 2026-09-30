@@ -28,6 +28,7 @@ from app.services.grid_service import (
     GridParameterError,
 )
 from app.notification.wechat import (
+    SEPARATOR,
     WeChatNotifier,
     format_ndx_grid_manual_close,
     get_wechat_notifier,
@@ -42,7 +43,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/grid", tags=["grid"])
 
 HTTP_CONFLICT = 409
-
 
 def require_admin(request: Request) -> None:
     """复用现有 admin cookie 认证 (app.main.verify_admin_cookie)，未认证返回 401"""
@@ -99,8 +99,14 @@ def grid_status(db: Session = Depends(get_db), _: None = Depends(require_admin))
 
 @router.get("/waiting")
 def get_waiting(db: Session = Depends(get_db), _: None = Depends(require_admin)):
-    """当前 WAITING 周期; 不存在返回 null"""
-    return grid_service.get_waiting_cycle(db)
+    """当前 WAITING 周期; 不存在返回 null。附 TTL 状态 (剩余多少个交易日过期)。"""
+    cycle = grid_service.get_waiting_cycle(db)
+    if cycle is None:
+        return None
+    return {
+        **cycle,
+        "ttl": grid_service.get_waiting_ttl_state(db, cycle_id=cycle["id"]),
+    }
 
 
 @router.get("/running")
@@ -143,6 +149,58 @@ def start_cycle(
         raise HTTPException(status_code=HTTP_CONFLICT, detail=str(e))
     except GridParameterError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{cycle_id}/dismiss")
+def dismiss_cycle(
+    cycle_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_admin)
+):
+    """
+    WAITING -> DISMISSED: 人工忽略这条开仓建议 (终态, 释放信号闸门)。
+
+    历史问题: WAITING 一旦生成会永久阻塞后续信号, 用户不打算开这张网格时
+    没有任何出口。本接口提供显式取消。
+    """
+    try:
+        result = grid_service.dismiss_waiting_cycle(db, cycle_id)
+    except GridCycleNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except GridCycleStateError as e:
+        raise HTTPException(status_code=HTTP_CONFLICT, detail=str(e))
+
+    # 状态变化通知 (🚫 已忽略): 通知/日志失败不影响已提交的状态变更
+    try:
+        notifier = _get_wechat_notifier()
+        if notifier is not None:
+            message = "\n".join([
+                "🚫 NDX Grid 入场建议已忽略",
+                SEPARATOR,
+                f"记录 ID：{result.get('id')}",
+                f"Base：{result.get('suggested_base_price')}",
+                f"Upper：{result.get('suggested_upper_price')}",
+                f"Lower：{result.get('suggested_lower_price')}",
+                "",
+                "该建议已标记 DISMISSED (终态, 未在交易所执行)，",
+                "信号闸门已重新打开，后续满足条件会重新发出入场建议。",
+            ])
+            try:
+                success = bool(notifier.send_message(message))
+            except Exception as e:
+                logger.error(f"Failed to send dismiss notification: {e}")
+                success = False
+            log_alert(
+                db, "NDX_GRID_WAITING_DISMISSED", "NDX Grid Waiting Dismissed",
+                message, success, cycle_id=result.get("id"),
+            )
+    except Exception as e:
+        logger.warning(f"dismiss notification skipped: {e}")
+
+    # cycle 结束: 允许下一个 cycle 重新触发 proximity 提醒
+    dedup.clear_proximity()
+
+    return result
 
 
 @router.post("/{cycle_id}/close")

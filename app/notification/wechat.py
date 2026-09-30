@@ -155,11 +155,19 @@ def format_ndx_grid_entry(
     indicators: Optional[Dict[str, Any]] = None,
     rsi_threshold: Any = DEFAULT_RSI_THRESHOLD,
     now: Optional[datetime] = None,
+    entry_basis: Optional[str] = None,
 ) -> str:
     """🟢 Grid Entry 入场信号 (Entry Signal 真正触发并创建 WAITING 后)"""
     indicators = indicators or {}
     if not _is_num(rsi_threshold):
         rsi_threshold = DEFAULT_RSI_THRESHOLD
+
+    # 开仓判定基准 (收盘确认制): 有 closed_* 时展示已收盘 RSI, 与判定口径一致
+    closed_basis = bool(indicators.get("closed_indicators_available")) or entry_basis == "CLOSED_BAR"
+    rsi_value = indicators.get("closed_rsi") if closed_basis else indicators.get("rsi")
+    if closed_basis and rsi_value is None:
+        rsi_value = indicators.get("rsi")
+    basis_date = indicators.get("closed_bar_date") if closed_basis else indicators.get("data_timestamp")
 
     # 支持 GridCycle ORM (suggested_*) 与 grid_math 输出 dict (base_price 等)
     if isinstance(cycle, dict) and "suggested_base_price" not in cycle:
@@ -185,11 +193,13 @@ def format_ndx_grid_entry(
         f"📅 {_fmt_date_cn(now, with_time=True)}",
         "",
         "🟢 RSI 已进入入场区域",
-        "",
     ]
+    if closed_basis:
+        lines.append(f"（判定基准：最后一根已收盘日K {basis_date or 'N/A'}）")
+    lines += [""]
     lines += _market_section(current_price, indicators)
     lines += [""]
-    lines += _entry_section(indicators.get("rsi"), rsi_threshold)
+    lines += _entry_section(rsi_value, rsi_threshold)
     lines += [
         "",
         "📐 建议建立 Grid",
@@ -380,6 +390,59 @@ def format_ndx_grid_stop_loss(
         SEPARATOR,
         "⚠️ 本系统仅提供行情、Grid 状态及风险提醒，",
         "不连接交易所，不自动交易。",
+    ]
+    return "\n".join(lines)
+
+
+def format_ndx_grid_waiting_expired(
+    cycle: Any,
+    ttl_state: Optional[Dict[str, Any]] = None,
+    indicators: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> str:
+    """⌛ WAITING 周期超时过期通知 (未确认的入场建议已作废, 信号闸门重新打开)"""
+    indicators = indicators or {}
+    ttl_state = ttl_state or {}
+
+    base = _get(cycle, "suggested_base_price")
+    upper = _get(cycle, "suggested_upper_price")
+    lower = _get(cycle, "suggested_lower_price")
+    count = _get(cycle, "suggested_grid_count")
+    leverage = _get(cycle, "suggested_leverage")
+    step = _grid_step(upper, lower, count)
+
+    ttl_days = ttl_state.get("ttl_trading_days")
+    elapsed = ttl_state.get("elapsed_trading_days")
+
+    lines = [
+        "⌛ NDX Grid 入场建议已过期",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        "⚠️ 该入场信号已超过确认期限",
+        f"记录 ID：{_get(cycle, 'id', 'N/A')}",
+        f"生成时间：{_get(cycle, 'created_at', 'N/A')}",
+    ]
+    if _is_num(ttl_days):
+        lines.append(f"确认期限：{int(ttl_days)} 个交易日"
+                     + (f"（已过 {int(elapsed)} 个交易日）" if _is_num(elapsed) else ""))
+    lines += [
+        "",
+        "📐 作废的建议参数",
+        f"Base：{_fmt_price(base)}",
+        f"Upper：{_fmt_price(upper)}",
+        f"Lower：{_fmt_price(lower)}",
+        f"网格：{_fmt_grid_count(count)}",
+        f"每格：{_fmt_price(step)}",
+        f"杠杆：{_fmt_leverage(leverage)}",
+        "",
+        "💡 说明",
+        "该记录已标记为 EXPIRED (终态), 未在交易所执行。",
+        "信号闸门已重新打开, 后续满足条件时会重新发出入场建议。",
+        "",
+        SEPARATOR,
+        "⚠️ 本系统仅提供信号及 Grid 参数提醒,",
+        "不连接交易所, 不自动交易。",
     ]
     return "\n".join(lines)
 

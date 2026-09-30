@@ -24,6 +24,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from tests.support import login_client  # noqa: E402
 from app.database.models import Base, GridCycle
 from app.alerts.grid_cycle import (
     create_waiting_grid_cycle,
@@ -422,7 +423,7 @@ class TestGridApi(unittest.TestCase):
         app.dependency_overrides[get_db] = lambda: self.db
         self.app = app
         self.client = TestClient(app)
-        self.client.cookies.set("admin_logged_in", "true")
+        login_client(self.client)
 
     def tearDown(self):
         self.client.close()

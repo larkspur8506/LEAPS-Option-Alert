@@ -21,11 +21,14 @@ from app.alerts.grid_cycle import (
     get_latest_stopped_grid_cycle,
     create_waiting_grid_cycle,
     close_grid_cycle,
-    stop_grid_cycle
+    stop_grid_cycle,
+    dismiss_waiting_grid_cycle,
+    expire_waiting_grid_cycle,
+    waiting_ttl_state,
 )
-from app.alerts.ndx_rules import check_ndx_entry_signals
+from app.alerts.ndx_rules import check_ndx_entry_signals, _entry_reference
 from app.alerts import dedup
-from app.alerts.alert_log import log_alert
+from app.alerts.alert_log import log_alert, alerted_within, utcnow_naive
 from app.notification.wechat import (
     WeChatNotifier,
     format_ndx_grid_entry,
@@ -33,6 +36,7 @@ from app.notification.wechat import (
     format_ndx_grid_closed,
     format_ndx_grid_stopped,
     format_ndx_grid_stop_loss,
+    format_ndx_grid_waiting_expired,
 )
 from app.scheduler.trading_hours import get_latest_trading_day
 
@@ -45,6 +49,22 @@ PROXIMITY_DISTANCE = 5.0
 DEFAULT_RSI_THRESHOLD = 35.0
 # Lower 被跌破后再向下触发止损提醒的默认比例 (可被运行时配置覆盖)
 DEFAULT_STOP_LOSS_AFTER_LOWER_PCT = 0.10
+# WAITING 默认存活期 (交易日); 0 表示不过期 (历史行为)
+DEFAULT_WAITING_TTL_TRADING_DAYS = 3
+# 落库级 cycle 去重窗口: STOPPED/止损提醒按 cycle 只发一次, 窗口取足够大 (5 年)
+CYCLE_DEDUP_WINDOW_SECONDS = 5 * 365 * 24 * 3600
+
+
+def _resolve_waiting_ttl(config: Optional[Any]) -> int:
+    """从运行时配置读取 WAITING TTL (交易日); 缺失/非法回退默认 3, 0 表示关闭。"""
+    try:
+        if config and hasattr(config, "get_waiting_ttl_trading_days"):
+            value = config.get_waiting_ttl_trading_days()
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+    except Exception:
+        pass
+    return DEFAULT_WAITING_TTL_TRADING_DAYS
 
 
 def _resolve_stop_loss_after_lower_pct(config: Optional[Any]) -> float:
@@ -72,11 +92,13 @@ def _resolve_rsi_threshold(config: Optional[Any]) -> float:
 
 
 def _notify_with_log(db: Session, notifier: Optional[WeChatNotifier],
-                     message: str, alert_type: str, rule_name: str) -> bool:
+                     message: str, alert_type: str, rule_name: str,
+                     cycle_id: Optional[int] = None) -> bool:
     """
     发送已格式化的完整消息并写入 AlertLog (message 与实际发送内容完全一致)。
     notifier 为 None (未配置 webhook) 时跳过, 与既有行为一致。
     通知/日志失败均不影响已提交的状态变更。
+    cycle_id: 关联周期 id, 支持重启后仍生效的落库级去重查询。
     """
     if notifier is None:
         return False
@@ -96,6 +118,7 @@ def _notify_with_log(db: Session, notifier: Optional[WeChatNotifier],
             message=message,
             success=success,
             error_message="Failed to send WeChat notification" if not success else None,
+            cycle_id=cycle_id,
         )
     except Exception as e:
         logger.warning(f"[NDX Monitor] Failed to write AlertLog ({alert_type}): {e}")
@@ -235,7 +258,8 @@ def process_ndx_grid_cycle(
             if notifier:
                 try:
                     message = format_ndx_grid_closed(closed_cycle, current_price, indicators=ndx_data)
-                    _notify_with_log(db, notifier, message, "NDX_GRID_CLOSED", "NDX Grid Upper Reached")
+                    _notify_with_log(db, notifier, message, "NDX_GRID_CLOSED", "NDX Grid Upper Reached",
+                                     cycle_id=closed_cycle.id)
                 except Exception as e:
                     logger.error(f"[NDX Monitor] Failed to send WeChat upper alert for cycle {closed_cycle.id}: {e}")
 
@@ -262,7 +286,8 @@ def process_ndx_grid_cycle(
                         indicators=ndx_data,
                         stop_loss_after_lower_pct=_resolve_stop_loss_after_lower_pct(config),
                     )
-                    _notify_with_log(db, notifier, message, "NDX_GRID_STOPPED", "NDX Grid Lower Breached")
+                    _notify_with_log(db, notifier, message, "NDX_GRID_STOPPED", "NDX Grid Lower Breached",
+                                     cycle_id=stopped_cycle.id)
                 except Exception as e:
                     logger.error(f"[NDX Monitor] Failed to send WeChat lower alert for cycle {stopped_cycle.id}: {e}")
 
@@ -301,14 +326,57 @@ def process_ndx_grid_cycle(
 
     # -------------------------------------------------------------
     # 2. 查询 WAITING 周期
+    #    - WAITING 未过期: 不评估新信号 (避免同一时间多条建议)
+    #    - WAITING 已超过 TTL (交易日): 自动过期 (EXPIRED) 并通知, 随后继续
+    #      评估新信号, 避免一条被忽略的建议永久阻塞后续所有信号
     # -------------------------------------------------------------
     waiting_cycle = get_waiting_grid_cycle(db)
     if waiting_cycle:
-        logger.debug(
-            f"[NDX Monitor] WAITING cycle ID={waiting_cycle.id} already exists. "
-            f"Skipping entry signal check."
-        )
-        return {"status": "WAITING_EXISTS", "cycle_id": waiting_cycle.id}
+        ttl_trading_days = _resolve_waiting_ttl(config)
+        ttl_state = waiting_ttl_state(waiting_cycle, ttl_trading_days)
+
+        if ttl_state.get("expired"):
+            logger.info(
+                f"[NDX Monitor] WAITING cycle ID={waiting_cycle.id} exceeded TTL "
+                f"({ttl_trading_days} trading days). Expiring it and re-evaluating entry signals."
+            )
+            expired_cycle = expire_waiting_grid_cycle(
+                db,
+                waiting_cycle.id,
+                notes=(
+                    f"WAITING_TTL_EXPIRED: {ttl_trading_days} trading days without user confirmation "
+                    f"(elapsed={ttl_state.get('elapsed_trading_days')})"
+                ),
+            )
+
+            if notifier:
+                try:
+                    message = format_ndx_grid_waiting_expired(
+                        expired_cycle, ttl_state=ttl_state, indicators=ndx_data
+                    )
+                    _notify_with_log(
+                        db, notifier, message,
+                        "NDX_GRID_WAITING_EXPIRED", "NDX Grid Waiting Expired",
+                        cycle_id=expired_cycle.id,
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[NDX Monitor] Failed to send WeChat waiting-expired alert for cycle "
+                        f"{expired_cycle.id}: {e}"
+                    )
+
+            # 周期已结束: 允许下一次 proximity 提醒
+            dedup.clear_proximity()
+
+            # 不提前 return: 同一轮继续评估开仓信号 (过期即释放信号闸门)
+            waiting_cycle = None
+        else:
+            logger.debug(
+                f"[NDX Monitor] WAITING cycle ID={waiting_cycle.id} already exists "
+                f"(remaining trading days={ttl_state.get('remaining_trading_days')}). "
+                f"Skipping entry signal check."
+            )
+            return {"status": "WAITING_EXISTS", "cycle_id": waiting_cycle.id, "waiting_ttl": ttl_state}
 
     # -------------------------------------------------------------
     # 3. 既无 RUNNING 也无 WAITING: 检查 NDX 开仓信号
@@ -326,10 +394,17 @@ def process_ndx_grid_cycle(
         if notifier:
             try:
                 threshold = _resolve_rsi_threshold(config)
+                entry_basis = None
+                try:
+                    entry_basis = _entry_reference(current_price, ndx_data).get("basis")
+                except Exception:
+                    entry_basis = None
                 message = format_ndx_grid_entry(
-                    new_cycle, current_price, indicators=ndx_data, rsi_threshold=threshold
+                    new_cycle, current_price, indicators=ndx_data, rsi_threshold=threshold,
+                    entry_basis=entry_basis,
                 )
-                _notify_with_log(db, notifier, message, "NDX_GRID_ENTRY", "NDX Grid Entry Signal")
+                _notify_with_log(db, notifier, message, "NDX_GRID_ENTRY", "NDX Grid Entry Signal",
+                                 cycle_id=new_cycle.id)
             except Exception as e:
                 logger.error(f"[NDX Monitor] Failed to send WeChat entry alert for cycle {new_cycle.id}: {e}")
 
@@ -413,6 +488,17 @@ def _evaluate_stop_loss_alert(
             "cycle_id": stopped_cycle.id,
         }
 
+    # 落库级去重 (P2 修复): 进程重启后内存去重会丢失, 这里再查一次 AlertLog,
+    # 保证同一条 STOPPED 周期不会因为重启而重复推送止损提醒。
+    if alerted_within(db, "NDX_GRID_STOP_LOSS", CYCLE_DEDUP_WINDOW_SECONDS, cycle_id=stopped_cycle.id):
+        return {
+            "evaluated": True,
+            "triggered": True,
+            "deduplicated": True,
+            "stop_loss_alert_price": alert_price,
+            "cycle_id": stopped_cycle.id,
+        }
+
     notified = False
     try:
         message = format_ndx_grid_stop_loss(
@@ -421,7 +507,11 @@ def _evaluate_stop_loss_alert(
             indicators=ndx_data,
             stop_loss_after_lower_pct=pct,
         )
-        notified = _notify_with_log(db, notifier, message, "NDX_GRID_STOP_LOSS", "NDX Grid Stop Loss Alert")
+        notified = _notify_with_log(
+            db, notifier, message,
+            "NDX_GRID_STOP_LOSS", "NDX Grid Stop Loss Alert",
+            cycle_id=stopped_cycle.id,
+        )
     except Exception as e:
         logger.error(f"[NDX Monitor] Failed to send WeChat stop loss alert for cycle {stopped_cycle.id}: {e}")
 
@@ -449,6 +539,12 @@ def _evaluate_proximity_alert(
     - Entry 触发 / cycle 结束 -> 状态重置 (由各事件分支调用 clear_proximity)
     """
     rsi = ndx_data.get("rsi")
+    # 接近提醒与开仓判定保持同一基准 (收盘确认制): 有 closed_* 时用已收盘 RSI,
+    # 避免"实时 RSI 进入 proximity 区域但收盘不成立"的噪声提醒。
+    try:
+        rsi = _entry_reference(current_price, ndx_data).get("rsi")
+    except Exception:
+        rsi = ndx_data.get("rsi")
     if not isinstance(rsi, (int, float)) or isinstance(rsi, bool):
         dedup.mark_proximity_exit()
         return

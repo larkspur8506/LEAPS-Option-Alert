@@ -8,8 +8,14 @@
 
 - **标的**：`^NDX`（Nasdaq-100 指数，对应期货/永续合约做多网格）
 - **方向**：Long-Only（纯做多等差网格）
-- **网格类型**：算术（等差）网格，默认 200 格 / 201 个价格节点
-- **默认参数**：Upper = 基准价 +20%，Lower = 基准价 -20%，建议杠杆 5.0x
+- **网格类型**：算术（等差）网格
+- **默认建议参数**（可由 `DEFAULT_GRID_*` 环境变量或数据库覆盖，线上实际值可能不同）：Upper = 基准价 +20%，Lower = 基准价 -20%，200 格，建议杠杆 5.0x
+
+> [!TIP]
+> **格距与手续费**：每格价格幅度 = `(Upper% + Lower%) × Base / 格数`。
+> ±20% / 200 格 ⇒ 格距 0.2%；±15% / 300 格 ⇒ 格距 0.1%。
+> 交易所单边手续费 0.05% 时往返成本 0.1%，后者会把每格毛利完全吃掉。
+> 后台 `/admin/rules` 页会按当前参数与 `GRID_*_FEE_PCT` / `FUNDING_RATE_PCT_8H` 实时展示这一比值（**仅展示，不参与任何判定**）。
 
 ---
 
@@ -25,6 +31,11 @@
 1. **RSI(14) < 35**（短期极度超卖，阈值可通过 `RSI_THRESHOLD` 配置）。
 2. **连续 3 个交易日收盘价 > SMA200**（确认长期牛市趋势）。
 3. **当前价格 > 约 1 年前收盘价**（确认中长线大趋势向上）。
+
+> [!IMPORTANT]
+> **收盘确认制**：以上判定统一使用**最后一根已收盘日 K**（`closed_*` 指标，盘中不会随实时价跳动）。
+> 盘中最后一根未收盘 bar 的 RSI 瞬时破位不会生成信号，也不会解除已成立的信号；
+> 数据层同时保留实时值用于展示（`/admin` 页面的“实时 RSI”）。
 
 > [!NOTE]
 > 触发开仓信号后，系统自动生成一条 `WAITING` 状态的网格周期记录（Grid Cycle），并通过企业微信推送建议网格参数。
@@ -46,14 +57,22 @@
 stateDiagram-v2
     [*] --> WAITING: 触发 Entry Signal (生成 Suggested 参数)
     WAITING --> RUNNING: 用户在后台录入 Actual 参数并手动启动
+    WAITING --> DISMISSED: 用户人工忽略此建议 (终态)
+    WAITING --> EXPIRED: 超过 WAITING_TTL_TRADING_DAYS 个交易日未确认 (终态)
     RUNNING --> CLOSED: 触发上限 (UPPER_REACHED) 或 用户手动关闭 (MANUAL_CLOSE)
     RUNNING --> STOPPED: 跌破下限 (LOWER_BREACHED)
     CLOSED --> [*]: 终态
     STOPPED --> [*]: 终态
+    DISMISSED --> [*]: 终态
+    EXPIRED --> [*]: 终态
 ```
 
 - **WAITING**：已生成开仓信号，等待用户在交易所开仓并在后台录入 Actual 参数。
 - **RUNNING**：用户已确认启动，系统每 5 分钟监控现价与 Actual Upper / Lower 边界。
+- **DISMISSED / EXPIRED**：WAITING 的两个终态出口（人工忽略 / 超期自动过期）。
+  历史版本里 WAITING 会**永久阻塞**后续信号（`grid_api` 只有 start/close，没有取消入口），
+  用户不打算开这张网格时系统会静默哑火；现在两条出口都会释放信号闸门，
+  且都会写一条通知 + AlertLog（`NDX_GRID_WAITING_DISMISSED` / `NDX_GRID_WAITING_EXPIRED`）。
 - **CLOSED / STOPPED**：终态（CLOSED 表示触及上限或手动关闭，STOPPED 表示跌破下限）。新周期必须等待旧周期完全结束后重新出现 Entry Signal 才会创建。
 
 ### 5. 定时监控与边界触发
@@ -74,6 +93,7 @@ NDX <= Lower × (1 - pct) → 发送 NDX_GRID_STOP_LOSS 止损提醒 (默认 pct
 
 - **止损提醒线** = `Lower × (1 - DEFAULT_GRID_STOP_LOSS_AFTER_LOWER_PCT)`（百分比相对 **Lower**，而非 Base；例：Base 30,000 / Lower 25,500 / 止损提醒线 22,950）。
 - **cycle 级去重**：同一 Grid Cycle 只发送一次 STOP_LOSS（价格继续下跌不重复报警）；反弹不触发，也不自动恢复 RUNNING。
+  去重状态**内存 + 数据库双写**：告警落库时带 `cycle_id`，进程重启后仍能识别“该 cycle 已提醒过”。
 - **不改变状态机**：STOP_LOSS 仅为独立通知事件，GridCycle 仍保持 `STOPPED`；系统不会自动平仓，也不会自动重建 Grid，新 Cycle 必须等待新的 Entry Signal。
 
 ---
@@ -105,17 +125,23 @@ $$\text{数据库 Configuration.daily\_report\_mode} > \text{环境变量 DAILY\
 
 ## 🖥️ 后台管理界面 (Admin UI)
 
-系统提供轻量级 HTML 管理后台，使用 Session Cookie 进行权限认证：
+系统提供轻量级 HTML 管理后台，使用**服务端签名会话 Cookie** 进行权限认证：
+
+> [!WARNING]
+> 历史版本用明文 Cookie `admin_logged_in=true` 表示已登录，任何人手工设置该 Cookie 即可访问后台；
+> 现在改为 starlette `SessionMiddleware` 签名会话 + `/admin/login` 限速（同来源 5 次失败 / 全局 30 次失败 → 冷却 10 分钟）。
+> 管理员口令使用 **scrypt** 加盐散列（兼容校验历史无盐 SHA-256 记录），`/setup` 仅允许首次初始化且需要 `SETUP_TOKEN`（或本机回环访问）。
 
 - **`/admin`**：综合仪表盘。显示 NDX 实时指标、当前 Grid 周期状态与理论持仓比例。
-- **`/admin/grid`**：网格专项管理。查看 WAITING 待启动周期与 RUNNING 运行中周期，提供确认启动（录入 Actual 参数）与手动关闭按钮，以及历史周期列表。
-- **`/admin/rules`**：策略规则与日报配置。可查看 NDX 策略阈值，并支持切换每日 16:30 的 Daily Report 模式（`off` / `ndx_grid`）。
+- **`/admin/grid`**：网格专项管理。查看 WAITING 待启动周期与 RUNNING 运行中周期，提供确认启动（录入 Actual 参数）、**忽略建议**与手动关闭按钮，以及历史周期列表。WAITING 卡片会显示剩余存活交易日（TTL）。
+- **`/admin/rules`**：策略规则与日报配置。可查看 NDX 策略阈值、**风险/成本速算卡片**（格距、往返手续费、手续费占格距比例、满仓浮亏、估算强平价、资金费拖累），并支持切换每日 16:30 的 Daily Report 模式（`off` / `ndx_grid`）。
 - **`/admin/logs`**：查看系统历史报警与推送日志。
 
 ### REST API (`/api/grid/*`)
-- `GET /api/grid/status`：Dashboard 数据（NDX 指标 + 周期 + 理论位置）
+- `GET /api/grid/status`：Dashboard 数据（NDX 指标 + 周期 + 理论位置 + WAITING TTL + 风险快照）
 - `GET /api/grid/waiting` / `GET /api/grid/running` / `GET /api/grid/history`
 - `POST /api/grid/{id}/start`：WAITING → RUNNING（录入 Actual 参数）
+- `POST /api/grid/{id}/dismiss`：WAITING → DISMISSED（人工忽略建议；非 WAITING 返回 409）
 - `POST /api/grid/{id}/close`：RUNNING → CLOSED（MANUAL_CLOSE）
 
 ---
@@ -123,12 +149,15 @@ $$\text{数据库 Configuration.daily\_report\_mode} > \text{环境变量 DAILY\
 ## 🔐 安全与容错机制 (Fail-Safe & Security)
 
 1. **绝对无自动执行**：系统不保存也不接入任何交易所 API Key，从物理上杜绝自动下单风险。
-2. **Commit-Before-Notify（先落盘后通知）**：网格状态机变更是最高优先级事务，必须先成功 Commit 到 SQLite 数据库后再触发企业微信 Webhook 通知。若 Webhook 发送失败，**绝不回滚**已提交的数据库状态。
-3. **Fail-Closed 数据保护**：行情接口异常或返回 Stale 数据时，定时任务自动跳过，不触发任何状态变更与误报。
-4. **日志敏感信息脱敏 (Secret Redaction)**：自动对日志中的 Webhook `key=***` 等敏感 Token 进行正则脱敏，防止 Secret 泄露到控制台或日志文件。
-5. **Scheduler Session 线程隔离**：每 5 分钟运行的 `check_ndx_grid_cycles` 和 16:30 运行的 `send_daily_report` 均显式传入 `db=None`，在任务内部自建并关闭独立的 `SessionLocal`，避免并发任务共享 Session 导致 SQLite 接口报错。
-6. **SQLite 连接池规范**：生产环境 `engine` 不使用 `StaticPool`，确保多请求并发时的连接安全与事务隔离。
-7. **任务异常隔离**：任何单个 Scheduler Job 发生的异常均被捕获并记录日志，不会导致主进程或其他线程停运。
+2. **管理员认证加固**：签名会话 Cookie（`SESSION_SECRET` 或 `data/.session_secret`）、scrypt 口令散列、登录限速、`/setup` 初始化门禁（`SETUP_TOKEN`）。
+3. **AlertLog 统一写入层**：所有告警的 `message` 字段保存**实际发送的完整文本**（不再包一层 JSON），时间戳统一写 UTC naive，查询/展示按美东时间换算；`cycle_id` 字段把提醒与 GridCycle 绑定，支撑跨重启去重。
+4. **Commit-Before-Notify（先落盘后通知）**：网格状态机变更是最高优先级事务，必须先成功 Commit 到 SQLite 数据库后再触发企业微信 Webhook 通知。若 Webhook 发送失败，**绝不回滚**已提交的数据库状态。
+5. **Fail-Closed 数据保护**：行情接口异常或返回 Stale 数据时，定时任务自动跳过，不触发任何状态变更与误报。
+6. **日志敏感信息脱敏 (Secret Redaction)**：自动对日志中的 Webhook `key=***` 等敏感 Token 进行正则脱敏，防止 Secret 泄露到控制台或日志文件。
+7. **Scheduler Session 线程隔离**：每 5 分钟运行的 `check_ndx_grid_cycles` 和 16:30 运行的 `send_daily_report` 均显式传入 `db=None`，在任务内部自建并关闭独立的 `SessionLocal`，避免并发任务共享 Session 导致 SQLite 接口报错。
+8. **SQLite 连接池规范**：生产环境 `engine` 不使用 `StaticPool`，确保多请求并发时的连接安全与事务隔离。
+9. **任务异常隔离**：任何单个 Scheduler Job 发生的异常均被捕获并记录日志，不会导致主进程或其他线程停运。
+10. **告警去重线程安全**：进程内去重状态由 `threading.RLock()` 串行化（uvicorn 单进程多线程模型下的竞态修复）。
 
 ---
 
@@ -178,14 +207,22 @@ NDX Grid Alert/
 | 配置项 | 环境变量项 | 默认值 | 作用与说明 |
 | :--- | :--- | :--- | :--- |
 | **企业微信 Webhook** | `WECHAT_WEBHOOK_URL` | `""` | 报警与 Daily Report 推送地址 |
+| **初始化口令** | `SETUP_TOKEN` | `""` | `/setup` 初始化门禁；未配置时仅允许本机回环访问 |
+| **会话签名密钥** | `SESSION_SECRET` | `""` | 留空则自动生成 `data/.session_secret`（0600，随数据卷持久化） |
+| **会话有效期** | `SESSION_MAX_AGE_HOURS` | `168` | 管理员登录有效小时数 |
+| **Cookie Secure** | `COOKIE_SECURE` | `false` | HTTPS 部署置 `true` |
 | **RSI 阈值** | `RSI_THRESHOLD` | `35.0` | NDX 超卖判定阈值 |
 | **默认网格上限比例** | `DEFAULT_GRID_UPPER_PCT` | `0.20` | 建议网格 Upper 上浮比例 (+20%) |
 | **默认网格下限比例** | `DEFAULT_GRID_LOWER_PCT` | `0.20` | 建议网格 Lower 下浮比例 (-20%) |
 | **默认网格格数** | `DEFAULT_GRID_COUNT` | `200` | 建议等差网格分格数量 |
 | **默认网格杠杆** | `DEFAULT_GRID_LEVERAGE` | `5.0` | 建议网格杠杆倍数 |
 | **止损观察跌幅** | `DEFAULT_GRID_STOP_LOSS_AFTER_LOWER_PCT` | `0.10` | 跌破 Lower 后继续下跌该比例触发止损提醒（止损提醒线 = Lower × (1 - 该比例)） |
+| **WAITING 存活期** | `WAITING_TTL_TRADING_DAYS` | `3` | WAITING 建议多少个交易日后自动 EXPIRED；`0` = 不过期 |
+| **挂单手续费** | `GRID_MAKER_FEE_PCT` | `0.0` | 单边 %，仅用于风险速算展示（MEXC 合约可填 0） |
+| **吃单手续费** | `GRID_TAKER_FEE_PCT` | `0.0` | 单边 %，仅用于风险速算展示 |
+| **资金费** | `FUNDING_RATE_PCT_8H` | `0.0` | 每 8 小时 %，仅用于风险速算展示（日拖累 = 3 × 该值） |
 | **每日汇报模式** | `DAILY_REPORT_MODE` | `"ndx_grid"` | 可选 `off` / `ndx_grid` |
-| **日志保留天数** | `ALERT_LOG_RETENTION_DAYS` | `90` | AlertLog 清理周期 |
+| **日志保留天数** | `ALERT_LOG_RETENTION_DAYS` | `90` | AlertLog 清理周期（按 UTC 时间戳计算） |
 
 ---
 
@@ -209,12 +246,13 @@ pip install -r requirements.txt
 
 # 3. 配置文件准备
 cp .env.example .env
-# 编辑 .env 填写 WECHAT_WEBHOOK_URL 等必要参数
+# 编辑 .env 填写 WECHAT_WEBHOOK_URL 与 SETUP_TOKEN (务必先设 SETUP_TOKEN 再首次启动)
+# 如需真实手续费/资金费的风险速算展示, 同时填写 GRID_MAKER_FEE_PCT / GRID_TAKER_FEE_PCT / FUNDING_RATE_PCT_8H
 
 # 4. 启动服务
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
-启动后访问 `http://localhost:8000/setup` 初始化管理员密码，登录后进入 `/admin`。
+启动后访问 `http://localhost:8000/setup?token=<SETUP_TOKEN>` 初始化管理员密码（未配置 `SETUP_TOKEN` 时只能从本机 127.0.0.1 访问该页面），登录后进入 `/admin`。
 
 ---
 
@@ -256,6 +294,11 @@ python -m unittest discover tests -p "test_*.py"
 - `tests/test_grid_phase5.py`：并发、落盘恢复与安全加固测试
 - `tests/test_daily_report_phase6.py`：每日汇报测试（含休市日跳过 / STOPPED Grid 日报展示）
 - `tests/test_ndx_grid_stop_loss.py`：止损提醒测试（触发边界 / cycle 级去重 / 反弹 / 新 cycle / 配置 / 模板）
+- `tests/test_security_hardening.py`：**加固回归**（伪造 Cookie 失效 / 签名会话 / 登录限速 / `/setup` 门禁 / scrypt 与历史散列兼容 / WAITING TTL 与人工忽略 / 收盘确认制 / 风险速算 / AlertLog 统一写入）
+
+> [!NOTE]
+> CI（`.github/workflows/docker.yml`）现在**先跑全部单元测试，通过后才构建推送镜像**；
+> 镜像内的 `requirements.txt` 不含测试依赖，本地/CI 跑测试请装 `requirements-dev.txt`（含 `httpx`）。
 
 ---
 
@@ -268,15 +311,18 @@ python -m unittest discover tests -p "test_*.py"
 - **Phase 6**: 可配置每日汇报系统。支持在 16:30 灵活切换 `off` / `ndx_grid` 模式。
 - **Phase 7**: 彻底移除旧版 QQQ / LEAPS 期权功能，项目正式转为 NDX Grid Only。
 - **Phase 8**: 新增跌破下轨后继续下跌的独立止损提醒（`NDX_GRID_STOP_LOSS`，cycle 级去重、可配置比例）；美国市场全天休市日自动跳过每日日报。
+- **Phase 9（加固）**: 安全与生命周期加固。①后台会话改为服务端签名 Cookie（废弃可伪造的 `admin_logged_in=true`），口令改 scrypt 散列，登录限速，`/setup` 加 `SETUP_TOKEN` 门禁；②开仓判定改为**收盘确认制**（消除盘中噪声周期）；③WAITING 增加 `DISMISSED`（人工忽略）/`EXPIRED`（交易日 TTL）两个出口，并提供 `/api/grid/{id}/dismiss`；④告警生命周期改为「内存 + 落库 `cycle_id`」双写去重，时间戳统一 UTC；⑤日报落库改走统一写入层（不再 JSON 包装）；⑥`/admin/rules` 增加风险/成本速算卡片；⑦CI 先跑测试再构建，移除空转的 deploy job。
 
 ---
 
 ## ⚠️ 系统限制 (Limitations)
 
 1. **数据源依赖**：NDX 行情目前依赖 `yfinance`，非实时 Tick 级别数据，可能存在分钟级延迟；极短时间内接口异常时优先采取 Fail-Closed 机制跳过。
-2. **日报 Dedup 作用域**：`DAILY_REPORT` 的去重 Key 目前保存在进程内存中。若在 16:30 日报发送前或发送后重启服务，当天再次到达汇报点时可能会重新发送一次。
-3. **理论状态局限**：系统展示的理论网格收益、理论层级与持仓比例为基于等差网格模型的数学推算，不能等同于交易所的真实持仓或实际成交盈亏。
-4. **无自动化交易**：系统不会也不可能代替用户执行下单或挂单，任何网格开仓与关闭均需人工操作。
+2. **日报 Dedup 作用域**：`DAILY_REPORT` 现在同时有内存与落库（`alerted_within(NDX_GRID_DAILY_REPORT, 24h)`）两道闸门，重启后不会再重复发送。落库闸门的时间窗是“最近 24 小时”，跨自然日（如美东 16:30 与次日凌晨）的极端重启场景仍以窗口为准。
+3. **单进程部署假设**：去重与登录限速状态在进程内存中（`--workers 1`）。若改为多 worker/多副本，需要外部化这些状态（Redis/SQLite 表），并统一 `SESSION_SECRET`。
+4. **数据库备份**：SQLite 位于 Docker 卷内，代码库里没有自动备份机制；建议在宿主机加 cron 备份卷内容。
+5. **理论状态局限**：系统展示的理论网格收益、理论层级与持仓比例为基于等差网格模型的数学推算，不能等同于交易所的真实持仓或实际成交盈亏。`/admin/rules` 的风险速算（强平价、满仓浮亏、资金费拖累）同样是估算，未计滑点、阶梯保证金与交易所强平规则差异。
+6. **无自动化交易**：系统不会也不可能代替用户执行下单或挂单，任何网格开仓与关闭均需人工操作。
 
 ---
 
