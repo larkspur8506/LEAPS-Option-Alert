@@ -10,6 +10,7 @@ P0/P1 加固与策略修正的回归测试。
 - 风险/成本速算: 0 手续费平台下格距与资金费口径
 - AlertLog 统一写入层: 今日计数与落库级去重
 """
+import re
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -220,6 +221,40 @@ class TestSetupEndpointHardening(WebTestBase):
         res = self.client.post("/setup", data={"password": "123", "setup_token": "open-sesame"})
         self.assertEqual(res.status_code, 200)
         self.assertIn("至少为 6 位", res.text)
+        self.assertTrue(auth_mod.is_first_time_setup(self.db))
+
+    def test_5_browser_flow_form_carries_token(self):
+        """5. 浏览器真实流程: 带 token 打开页面 -> 表单把 token 一起提交 -> 设置成功
+
+        回归: 表单 action 写死为 /setup 且不带隐藏字段时, 用户从 ?token= 链接打开页面
+        能正常显示, 但提交会被 403 拒绝 ("初始化入口未授权"), 密码永远设置不上。
+        """
+        set_setup_token("open-sesame")
+        page = self.client.get("/setup?token=open-sesame")
+        self.assertEqual(page.status_code, 200)
+        m = re.search(r'name="setup_token"\s+value="([^"]*)"', page.text)
+        self.assertIsNotNone(m, "初始化页必须把 token 渲染进表单隐藏字段")
+        assert m is not None  # 供类型检查收窄
+        self.assertEqual(m.group(1), "open-sesame")
+
+        # 浏览器只会提交表单里的字段 (password + 隐藏 token), 不带 URL query
+        res = self.client.post("/setup", data={"password": "abcdef", "setup_token": m.group(1)})
+        self.assertEqual(res.status_code, 302)
+        self.assertTrue(auth_mod.verify_admin_password("abcdef", self.db))
+
+    def test_6_post_accepts_token_from_query_string(self):
+        """6. token 只出现在 URL 上 (旧链接/表单字段丢失) 时也放行"""
+        set_setup_token("open-sesame")
+        res = self.client.post("/setup?token=open-sesame", data={"password": "abcdef"})
+        self.assertEqual(res.status_code, 302)
+        self.assertTrue(auth_mod.verify_admin_password("abcdef", self.db))
+
+    def test_7_post_without_any_token_still_denied(self):
+        """7. 两个来源都没有 token 时依旧 403, 且提示如何拿到链接"""
+        set_setup_token("open-sesame")
+        res = self.client.post("/setup", data={"password": "abcdef"})
+        self.assertEqual(res.status_code, 403)
+        self.assertIn("?token=", res.text)
         self.assertTrue(auth_mod.is_first_time_setup(self.db))
 
 

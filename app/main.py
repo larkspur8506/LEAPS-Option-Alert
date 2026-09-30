@@ -203,18 +203,21 @@ async def setup(request: Request, password: str = Form(...), setup_token: str = 
         if not is_first_time_setup(db):
             return RedirectResponse(url="/admin/login", status_code=302)
 
-        if not _setup_allowed(request, setup_token):
+        # 口令来源: 表单隐藏字段 > URL 上的 ?token= (两者任一匹配即可)
+        token = setup_token or request.query_params.get("token") or ""
+        if not _setup_allowed(request, token):
             return templates.TemplateResponse(request=request, name="setup.html", context={
                 "request": request,
-                "error": "初始化入口未授权：SETUP_TOKEN 缺失或不匹配",
+                "error": "初始化入口未授权：SETUP_TOKEN 缺失或不匹配（请从带 ?token= 的初始化链接打开本页）",
                 "setup_token_required": bool(_configured_setup_token()),
+                "setup_token": token,
             }, status_code=403)
 
         if len(password) < 6:
             return templates.TemplateResponse(request=request, name="setup.html", context={
                 "request": request,
                 "error": "密码长度至少为 6 位",
-                "setup_token": setup_token,
+                "setup_token": token,
             })
 
         set_admin_password(db, password)

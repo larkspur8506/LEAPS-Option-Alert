@@ -14,6 +14,9 @@
         {% endif %}
 
         <form action="/setup" method="post" class="space-y-4">
+            {# 初始化口令必须随表单回传: 首次部署时 /setup 只允许带 ?token= 的链接访问,
+               表单丢弃 token 会导致提交被 403 拒绝 ("页面能打开但提交报未授权") #}
+            <input type="hidden" name="setup_token" value="{{ setup_token or '' }}">
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-1">设置管理员密码</label>
                 <input type="password" name="password" required
