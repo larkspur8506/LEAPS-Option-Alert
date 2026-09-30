@@ -79,5 +79,62 @@ class Config:
         return "ndx_grid"
 
 
+    # ---- 网格风险/成本参数 (用于 rules 页与日报的风险速算展示) ----
+    # 交易所手续费与资金费: MEXC 等平台可为零手续费, 但资金费仍需计入。
+    def get_grid_maker_fee_pct(self) -> float:
+        if self._db_config.get("grid_maker_fee_pct") is not None:
+            return float(self._db_config["grid_maker_fee_pct"])
+        return float(os.getenv("GRID_MAKER_FEE_PCT", "0.0"))
+
+    def get_grid_taker_fee_pct(self) -> float:
+        if self._db_config.get("grid_taker_fee_pct") is not None:
+            return float(self._db_config["grid_taker_fee_pct"])
+        return float(os.getenv("GRID_TAKER_FEE_PCT", "0.0"))
+
+    def get_funding_rate_pct_8h(self) -> float:
+        """每 8 小时资金费 (正数=多头付费), 单位 %. 缺失按 0 处理。"""
+        if self._db_config.get("funding_rate_pct_8h") is not None:
+            return float(self._db_config["funding_rate_pct_8h"])
+        return float(os.getenv("FUNDING_RATE_PCT_8H", "0.0"))
+
+    # ---- WAITING 周期生命周期 ----
+    def get_waiting_ttl_trading_days(self) -> int:
+        """
+        WAITING 周期在多少个交易日后自动过期 (EXPIRED)。
+
+        0 / 负数 / 非法值 => 关闭 TTL (WAITING 永不过期, 行为与历史版本一致)。
+        """
+        raw = self._db_config.get("waiting_ttl_trading_days")
+        if raw is None:
+            raw = os.getenv("WAITING_TTL_TRADING_DAYS", "3")
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 3
+        return max(0, value)
+
+
 def get_config(db_config: Optional[dict] = None) -> Config:
     return Config(db_config)
+
+
+def load_config_from_db(db) -> Config:
+    """
+    从 DB `configuration` 行构造运行时配置 (与 app.main 启动时/保存后的配置同源)。
+
+    用于无全局状态的调用点 (服务层/定时任务/页面) 读取 DB 覆盖的配置项:
+    任何异常都退回仅环境变量的配置, 不抛出。
+    """
+    try:
+        from app.database.models import Configuration
+
+        row = db.query(Configuration).first()
+        if not row:
+            return get_config()
+        return get_config({
+            "wechat_webhook_url": row.wechat_webhook_url,
+            "alert_log_retention_days": row.alert_log_retention_days,
+            "daily_report_mode": getattr(row, "daily_report_mode", None),
+        })
+    except Exception:
+        return get_config()

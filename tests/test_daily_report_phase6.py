@@ -24,6 +24,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from tests.support import login_client  # noqa: E402
 from app.database.models import Base, GridCycle, Configuration
 from app.alerts.grid_cycle import create_waiting_grid_cycle
 from app.services import grid_service
@@ -199,7 +200,7 @@ class TestConfigUpdateViaUI(DailyReportTestBase):
         from app.database.init_db import get_db
         app.dependency_overrides[get_db] = lambda: self.db
         client = TestClient(app, follow_redirects=False)
-        client.cookies.set("admin_logged_in", "true")
+        login_client(client)
         try:
             res = client.post(
                 "/admin/rules/daily-report-mode",
@@ -233,7 +234,7 @@ class TestConfigUpdateViaUI(DailyReportTestBase):
         from app.database.init_db import get_db
         app.dependency_overrides[get_db] = lambda: self.db
         client = TestClient(app, follow_redirects=True)
-        client.cookies.set("admin_logged_in", "true")
+        login_client(client)
         try:
             # 1. 保存 ndx_grid
             res = client.post("/admin/rules/daily-report-mode", data={"daily_report_mode": "ndx_grid"})
@@ -461,7 +462,24 @@ class TestNDXReportContent(DailyReportTestBase):
 class TestNDXAlertLogConsistency(DailyReportTestBase):
     """
     测试 A-G: NDX Grid 日报 AlertLog.message 与企业微信发送内容一致性。
+
+    说明 (P2 统一写入层): AlertLog.message 现在直接存放**实际发送的完整文本**,
+    不再用 json.dumps(alert_dict) 包装; 本 helper 同时兼容历史 JSON 记录,
+    避免旧数据读取报错。
     """
+
+    def _stored_message(self, log) -> str:
+        import json
+
+        raw = log.message or ""
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and isinstance(parsed.get("message"), str):
+                return parsed["message"]
+        except (ValueError, TypeError):
+            pass
+        return raw
+
 
     def _dashboard(self, running=None, waiting=None):
         return {
@@ -521,15 +539,13 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
         ).first()
         self.assertIsNotNone(log, "AlertLog 应该存在")
 
-        import json
-        stored = json.loads(log.message)
-        # AlertLog.message 经 json.dumps(alert_dict) 包装，stored["message"] 是完整文本
-        alert_log_message = stored["message"]
+        # AlertLog.message 直接存放完整发送文本 (P2 统一写入层)
+        alert_log_message = self._stored_message(log)
         wechat_message = captured_send.get("msg", "")
 
         self.assertEqual(
             alert_log_message, wechat_message,
-            "AlertLog.message['message'] 应与企业微信实际发送内容完全一致"
+            "AlertLog.message 应与企业微信实际发送内容完全一致"
         )
 
     def test_C_alertlog_message_is_not_summary_line(self):
@@ -555,8 +571,7 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
             AlertLog.alert_type == "NDX_GRID_DAILY_REPORT"
         ).first()
         self.assertIsNotNone(log)
-        stored = json.loads(log.message)
-        alert_log_message = stored["message"]
+        alert_log_message = self._stored_message(log)
 
         # 旧摘要格式不应存在
         self.assertNotRegex(
@@ -588,8 +603,8 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
         log = self.db.query(AlertLog).filter(
             AlertLog.alert_type == "NDX_GRID_DAILY_REPORT"
         ).first()
-        stored = json.loads(log.message)
-        msg = stored["message"]
+        stored_msg = self._stored_message(log)
+        msg = stored_msg
 
         for keyword in ["纳斯达克100", "RSI(14)", "Grid 状态", "Grid 入场信号"]:
             self.assertIn(keyword, msg, f"AlertLog.message 应包含字段: {keyword}")
@@ -639,8 +654,7 @@ class TestNDXAlertLogConsistency(DailyReportTestBase):
         self.assertIsNotNone(log)
         self.assertFalse(log.sent_successfully, "推送失败时 sent_successfully 应为 False")
         # message 仍然是完整内容，不是空字符串
-        stored = json.loads(log.message)
-        self.assertGreater(len(stored["message"]), 50)
+        self.assertGreater(len(self._stored_message(log)), 50)
 
 
 class TestMarketClosedSkip(DailyReportTestBase):

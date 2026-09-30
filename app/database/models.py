@@ -34,7 +34,7 @@ class AlertLog(Base):
     alert_type = Column(String, nullable=False)
     rule_name = Column(String, nullable=False)
 
-    triggered_at = Column(DateTime, server_default=func.now())
+    triggered_at = Column(DateTime, server_default=func.now(), index=True)
     message = Column(Text, nullable=False)
 
     sent_successfully = Column(Boolean, default=True)
@@ -42,6 +42,10 @@ class AlertLog(Base):
 
     # legacy 期权仓位遗留列: NDX 始终写 NULL, 保留以免触碰历史 schema
     position_id = Column(Integer, nullable=True)
+
+    # 关联的 GridCycle id (可空): 用于"同一周期只提醒一次"的落库级去重
+    # (进程重启后仍然有效, 见 app/alerts/alert_log.py::alerted_within)
+    cycle_id = Column(Integer, nullable=True, index=True)
 
 
 class GridCycle(Base):

@@ -6,7 +6,7 @@ import logging
 from .trading_hours import is_trading_time, get_current_time_et, is_trading_day
 from app.market.data_fetcher import DataFetcher
 from app.alerts import dedup
-from app.alerts.alert_log import log_alert
+from app.alerts.alert_log import log_alert, alerted_within, utcnow_naive
 from app.alerts.grid_monitor import process_ndx_grid_cycle
 from app.notification.wechat import (
     get_wechat_notifier,
@@ -38,10 +38,9 @@ def cleanup_old_data(db, config):
 
     from app.database.models import AlertLog
     from datetime import timedelta
-    from pytz import timezone
 
-    et_tz = timezone("America/New_York")
-    cutoff_date = datetime.now(et_tz) - timedelta(days=alert_log_retention)
+    # 时间基准统一为 UTC naive (AlertLog.triggered_at 的存储口径)
+    cutoff_date = utcnow_naive() - timedelta(days=alert_log_retention)
 
     deleted_alerts = db.query(AlertLog).filter(
         AlertLog.triggered_at < cutoff_date
@@ -138,19 +137,26 @@ def _send_ndx_grid_daily_report(data_fetcher: DataFetcher, db, config, report_da
         webhook = config.get_wechat_webhook_url()
     notifier = get_wechat_notifier(webhook)
 
-    # dedup key "DAILY_REPORT": 一天最多一份日报
-    if dedup.should_alert("DAILY_REPORT"):
+    # 去重 (两道): 内存态 (同进程) + 落库态 (跨重启, 修复"16:30 后重启当天重发日报")
+    already_sent_today = alerted_within(db, "NDX_GRID_DAILY_REPORT", 24 * 3600)
+    if not already_sent_today and dedup.should_alert("DAILY_REPORT"):
         # 先格式化完整日报文本 (与企业微信实际发送内容相同的唯一来源)
         formatted_message = notifier.format_ndx_grid_report(report_data)
         success = notifier.send_ndx_grid_report(report_data)
-        _log_alert(db, {
-            "alert_type": "NDX_GRID_DAILY_REPORT",
-            "rule_name": "NDX Grid Daily Report",
-            "message": formatted_message  # 与企业微信发送内容完全一致
-        }, success)
+        # 落库内容 = 实发内容 (不再写 legacy JSON)
+        log_alert(
+            db,
+            "NDX_GRID_DAILY_REPORT",
+            "NDX Grid Daily Report",
+            formatted_message,
+            success,
+        )
         logger.info(f"DAILY_REPORT mode=ndx_grid date={report_date} sent={success}")
     else:
-        logger.info(f"DAILY_REPORT mode=ndx_grid date={report_date} deduplicated")
+        logger.info(
+            f"DAILY_REPORT mode=ndx_grid date={report_date} deduplicated "
+            f"(db_guard={already_sent_today})"
+        )
 
 
 def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):

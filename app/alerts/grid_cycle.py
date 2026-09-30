@@ -216,3 +216,121 @@ def stop_grid_cycle(
     db.commit()
     db.refresh(cycle)
     return cycle
+
+
+def dismiss_waiting_grid_cycle(
+    db: Session,
+    cycle_id: int,
+    reason: str = "MANUAL_DISMISS",
+    notes: Optional[str] = None
+) -> GridCycle:
+    """
+    人工忽略一个 WAITING 周期 (WAITING -> DISMISSED, 终态)。
+
+    背景: 历史上 WAITING 是"一旦生成就永久阻塞新信号"的状态, 若用户不打算
+    在交易所开这张网格, 系统会静默哑火且无法取消。本函数提供显式出口。
+    """
+    cycle = db.query(GridCycle).filter(GridCycle.id == cycle_id).first()
+    if not cycle:
+        raise ValueError(f"GridCycle with id {cycle_id} not found.")
+
+    if cycle.status != "WAITING":
+        raise ValueError(
+            f"Illegal state transition: Cannot dismiss GridCycle in status '{cycle.status}'. Must be 'WAITING'."
+        )
+
+    cycle.status = "DISMISSED"
+    cycle.closed_at = get_current_time()
+    cycle.close_reason = reason
+    if notes:
+        cycle.notes = f"{cycle.notes}\n{notes}" if cycle.notes else notes
+
+    db.commit()
+    db.refresh(cycle)
+    return cycle
+
+
+def expire_waiting_grid_cycle(
+    db: Session,
+    cycle_id: int,
+    notes: Optional[str] = None
+) -> GridCycle:
+    """
+    WAITING 周期超时自动过期 (WAITING -> EXPIRED, 终态)。
+
+    由监控任务按 TTL (交易天数) 判定, 目的同上: 避免一条被忽略的开仓建议
+    永久阻塞后续信号。
+    """
+    cycle = db.query(GridCycle).filter(GridCycle.id == cycle_id).first()
+    if not cycle:
+        raise ValueError(f"GridCycle with id {cycle_id} not found.")
+
+    if cycle.status != "WAITING":
+        raise ValueError(
+            f"Illegal state transition: Cannot expire GridCycle in status '{cycle.status}'. Must be 'WAITING'."
+        )
+
+    cycle.status = "EXPIRED"
+    cycle.closed_at = get_current_time()
+    cycle.close_reason = "WAITING_TTL_EXPIRED"
+    if notes:
+        cycle.notes = f"{cycle.notes}\n{notes}" if cycle.notes else notes
+
+    db.commit()
+    db.refresh(cycle)
+    return cycle
+
+
+def count_trading_days_between(start_et: datetime, end_et: datetime) -> Optional[int]:
+    """
+    统计 (start_et.date(), end_et.date()] 之间的 NYSE 交易日数量 (不含起始日)。
+
+    WAITING TTL 用"交易日"而非自然日: 周末/节假日不应消耗确认时间。
+    日历查询失败时返回 None (调用方按"未过期"保守处理)。
+    """
+    try:
+        from app.scheduler.trading_hours import count_trading_days
+        return count_trading_days(start_et, end_et)
+    except Exception:
+        return None
+
+
+def waiting_ttl_state(cycle: GridCycle, ttl_trading_days: int, now_et: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    计算 WAITING 周期的 TTL 状态 (只读, 供监控/日报/界面展示)。
+
+    返回:
+        {
+          "ttl_enabled": bool,
+          "ttl_trading_days": int,
+          "elapsed_trading_days": int|None,
+          "remaining_trading_days": int|None,
+          "expired": bool,
+        }
+    """
+    now = now_et or get_current_time()
+    ttl = int(ttl_trading_days or 0)
+    state: Dict[str, Any] = {
+        "ttl_enabled": ttl > 0,
+        "ttl_trading_days": ttl,
+        "elapsed_trading_days": None,
+        "remaining_trading_days": None,
+        "expired": False,
+    }
+    if ttl <= 0 or cycle is None or cycle.created_at is None:
+        return state
+
+    created_at = cycle.created_at
+    if created_at.tzinfo is None:
+        # 历史数据可能是 naive UTC (server_default=func.now()), 统一按 UTC 解释
+        created_at = created_at.replace(tzinfo=timezone("UTC"))
+    start_et = created_at.astimezone(et_tz)
+
+    elapsed = count_trading_days_between(start_et, now)
+    if elapsed is None:
+        return state
+
+    state["elapsed_trading_days"] = elapsed
+    state["remaining_trading_days"] = max(0, ttl - elapsed)
+    state["expired"] = elapsed >= ttl
+    return state

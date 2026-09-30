@@ -11,11 +11,78 @@ et_tz = timezone("America/New_York")
 logger = logging.getLogger(__name__)
 
 
+def _closed_bar_indicators(clean_df: pd.DataFrame, live_bar_is_provisional: bool) -> Dict[str, Any]:
+    """
+    计算"最后一根已收盘 bar"的等价指标 (收盘确认制)。
+
+    - live_bar_is_provisional=True 表示最后一根 bar 是盘中未收盘的实时 bar,
+      此时参考位置回退一根 (倒数第二根), 即"上一交易日收盘"。
+    - 参考位置不足 253 根时, closed_price_1y_ago 为 None (不虚构)。
+    - 任何异常都不抛出, 只返回不可用标记, 不影响既有字段。
+    """
+    unavailable: Dict[str, Any] = {
+        "closed_bar_date": None,
+        "closed_price": None,
+        "closed_rsi": None,
+        "closed_ma200": None,
+        "closed_is_above_sma200_3d": False,
+        "closed_price_1y_ago": None,
+        "closed_indicators_available": False,
+    }
+    try:
+        total = len(clean_df)
+        if total == 0:
+            return unavailable
+
+        pos = total - 2 if (live_bar_is_provisional and total >= 2) else total - 1
+        row = clean_df.iloc[pos]
+
+        result = dict(unavailable)
+        result["closed_bar_date"] = str(clean_df.index[pos])
+        if pd.notna(row["Close"]):
+            result["closed_price"] = float(row["Close"])
+        if "rsi" in clean_df.columns and pd.notna(row["rsi"]):
+            result["closed_rsi"] = float(row["rsi"])
+        if "ma200" in clean_df.columns and pd.notna(row["ma200"]):
+            result["closed_ma200"] = float(row["ma200"])
+
+        if pos >= 2 and pd.notna(clean_df["ma200"].iloc[pos - 2:pos + 1]).all():
+            result["closed_is_above_sma200_3d"] = bool(
+                (clean_df["Close"].iloc[pos - 2:pos + 1] > clean_df["ma200"].iloc[pos - 2:pos + 1]).all()
+            )
+
+        i1y = pos - 252
+        if i1y >= 0:
+            result["closed_price_1y_ago"] = float(clean_df["Close"].iloc[i1y])
+
+        result["closed_indicators_available"] = (
+            result["closed_price"] is not None and result["closed_rsi"] is not None
+        )
+        return result
+    except Exception as exc:
+        logger.warning(f"[WARN] closed-bar indicator computation failed: {exc}")
+        return unavailable
+
+
 class DataFetcher:
     def __init__(self):
         # 缓存机制，避免频繁请求 yfinance 导致被封禁
         self._ndx_cache = None
         self._ndx_cache_time = 0.0
+        # 缓存对应的"最近交易日": 交易日切换后缓存立即失效, 避免长跑进程
+        # 在收盘后永久返回上一交易日的缓存数据
+        self._ndx_cache_trading_day = None
+
+    def _cache_still_current(self) -> bool:
+        """缓存是否属于当前最近交易日 (跨交易日/长假后自动失效)。"""
+        if not self._ndx_cache:
+            return False
+        try:
+            from app.scheduler.trading_hours import get_latest_trading_day
+            latest = get_latest_trading_day()
+        except Exception:
+            return True  # 日历不可用时不做额外约束, 退回原有 60s/收盘缓存语义
+        return latest is not None and latest == self._ndx_cache_trading_day
 
     def get_ndx_data(self) -> Dict[str, Any]:
         """
@@ -23,14 +90,14 @@ class DataFetcher:
 
         获取至少 2 年历史数据 (period="2y")，以安全支撑 SMA200 及倒数第 253 个交易日 (约一年前) 的价格计算。
         """
-        from app.scheduler.trading_hours import is_market_open_now
+        from app.scheduler.trading_hours import is_market_open_now, get_latest_trading_day
 
         current_time = time.time()
 
-        # 智能防封禁缓存逻辑
-        if self._ndx_cache:
+        # 智能防封禁缓存逻辑 (按交易日失效)
+        if self._cache_still_current():
             if not is_market_open_now():
-                logger.debug("[CACHE] Market is closed, using permanent cached NDX data")
+                logger.debug("[CACHE] Market is closed, using cached NDX data for the same trading day")
                 return self._ndx_cache
             elif current_time - self._ndx_cache_time < 60:
                 logger.debug("[CACHE] Market is open, using 60s cached NDX data")
@@ -62,6 +129,10 @@ class DataFetcher:
             if result:
                 self._ndx_cache = result
                 self._ndx_cache_time = current_time
+                try:
+                    self._ndx_cache_trading_day = get_latest_trading_day()
+                except Exception:
+                    self._ndx_cache_trading_day = None
             return result
 
         return {}
@@ -101,17 +172,35 @@ class DataFetcher:
     def _process_ndx_df(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
         处理 ^NDX DataFrame 并计算相关指标。
+
+        盘中时段最后一根日K是"未收盘"的实时 bar, 因此显式标记
+        `live_bar_is_provisional=True`, 由指标层额外算出一套**已收盘 bar**
+        的指标 (`closed_*`), 供开仓信号判定使用 (收盘确认制)。
         """
-        return self.calculate_technical_indicators(df, ticker="^NDX")
+        from app.scheduler.trading_hours import is_market_open_now
+
+        try:
+            provisional = bool(is_market_open_now())
+        except Exception:
+            provisional = False
+
+        return self.calculate_technical_indicators(
+            df, ticker="^NDX", live_bar_is_provisional=provisional
+        )
 
     @staticmethod
-    def calculate_technical_indicators(df: pd.DataFrame, ticker: str = "^NDX") -> Dict[str, Any]:
+    def calculate_technical_indicators(df: pd.DataFrame, ticker: str = "^NDX",
+                                       live_bar_is_provisional: bool = False) -> Dict[str, Any]:
         """
         纯指标计算函数。
 
         参数:
             df: 包含 Close, High, Low, Volume 的日K线 DataFrame
             ticker: 标的代码，默认 ^NDX
+            live_bar_is_provisional: 最后一根 bar 是否为"盘中未收盘"的实时 bar。
+                True 时会额外输出一组 `closed_*` 指标 (基于最后一根**已收盘** bar),
+                供开仓信号判定使用, 避免盘中噪声制造假信号。
+                默认 False, 即 `last_price`/`rsi` 等既有字段语义完全不变。
 
         指标定义与要求:
             - SMA200: 200交易日收盘移动平均
@@ -120,6 +209,7 @@ class DataFetcher:
             - price_1y_ago: 约252个交易日前的收盘价 (iloc[-253])，数据不足253天时显式标记不可用 (None)
             - data_timestamp: 最新数据所在时间
             - is_data_valid: 数据是否达到最小可用标准
+            - closed_*: 最后一根已收盘 bar 的等价指标 (收盘确认制, 见上)
         """
         if df is None or df.empty:
             return {
@@ -131,7 +221,16 @@ class DataFetcher:
                 "is_above_sma200_3d": False,
                 "price_1y_ago": None,
                 "price_1y_ago_available": False,
-                "data_timestamp": None
+                "data_timestamp": None,
+                # 收盘确认制字段 (无数据时全部不可用)
+                "live_bar_is_provisional": bool(live_bar_is_provisional),
+                "closed_bar_date": None,
+                "closed_price": None,
+                "closed_rsi": None,
+                "closed_ma200": None,
+                "closed_is_above_sma200_3d": False,
+                "closed_price_1y_ago": None,
+                "closed_indicators_available": False,
             }
 
         try:
@@ -203,6 +302,11 @@ class DataFetcher:
             # 6. 数据新鲜度与时间戳
             data_timestamp = str(clean_df.index[-1]) if len(clean_df.index) > 0 else None
 
+            # 7. 收盘确认制: 最后一根已收盘 bar 的等价指标
+            #    盘中 (live_bar_is_provisional=True) 时, 最后一根 bar 未收盘,
+            #    开仓判定改用倒数第二根 bar, 避免盘中 RSI 瞬时跌破阈值制造假信号。
+            closed = _closed_bar_indicators(clean_df, live_bar_is_provisional)
+
             result = {
                 "ticker": ticker,
                 "date": datetime.now(et_tz).date(),
@@ -226,7 +330,17 @@ class DataFetcher:
                 "consec_below": consec_below,
                 "price_1y_ago": price_1y_ago,
                 "price_1y_ago_available": price_1y_ago_available,
-                "total_records": total_len
+                "total_records": total_len,
+
+                # 收盘确认制字段 (开仓信号判定使用)
+                "live_bar_is_provisional": bool(live_bar_is_provisional),
+                "closed_bar_date": closed["closed_bar_date"],
+                "closed_price": closed["closed_price"],
+                "closed_rsi": closed["closed_rsi"],
+                "closed_ma200": closed["closed_ma200"],
+                "closed_is_above_sma200_3d": closed["closed_is_above_sma200_3d"],
+                "closed_price_1y_ago": closed["closed_price_1y_ago"],
+                "closed_indicators_available": closed["closed_indicators_available"],
             }
 
             return result

@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, date
 from typing import Set, Dict
 from pytz import timezone
@@ -118,28 +119,38 @@ class AlertDeduplicator:
 
 _deduplicator = AlertDeduplicator()
 
+# 线程安全: APScheduler 的线程池与 FastAPI 请求线程会并发触碰去重状态
+# (uvicorn --workers 1 下单进程多线程), 用可重入锁串行化。
+_dedup_lock = threading.RLock()
+
 
 def should_alert(rule_name: str, position_id: int = None) -> bool:
-    return _deduplicator.should_alert(rule_name, position_id)
+    with _dedup_lock:
+        return _deduplicator.should_alert(rule_name, position_id)
 
 def should_alert_weekly(rule_name: str, position_id: int = None) -> bool:
-    return _deduplicator.should_alert_weekly(rule_name, position_id)
+    with _dedup_lock:
+        return _deduplicator.should_alert_weekly(rule_name, position_id)
 
 
 # 接近入场阈值 (proximity) 事件: 状态型去重, 独立于按日/按周 key
 PROXIMITY_KEY = "NDX_GRID_PROXIMITY"
 
 def should_alert_proximity(cycle_key: str = PROXIMITY_KEY) -> bool:
-    return _deduplicator.should_alert_proximity(cycle_key)
+    with _dedup_lock:
+        return _deduplicator.should_alert_proximity(cycle_key)
 
 def mark_proximity_exit(cycle_key: str = PROXIMITY_KEY) -> None:
-    _deduplicator.mark_proximity_exit(cycle_key)
+    with _dedup_lock:
+        _deduplicator.mark_proximity_exit(cycle_key)
 
 def clear_proximity(cycle_key: str = PROXIMITY_KEY) -> None:
-    _deduplicator.clear_proximity(cycle_key)
+    with _dedup_lock:
+        _deduplicator.clear_proximity(cycle_key)
 
 def is_proximity_active(cycle_key: str = PROXIMITY_KEY) -> bool:
-    return _deduplicator.is_proximity_active(cycle_key)
+    with _dedup_lock:
+        return _deduplicator.is_proximity_active(cycle_key)
 
 
 # 止损提醒 (STOP_LOSS) 事件: cycle 级去重, 独立于按日/按周 key
@@ -150,19 +161,24 @@ def stop_loss_cycle_key(cycle_id: int) -> str:
     return f"{STOP_LOSS_KEY_PREFIX}{int(cycle_id)}"
 
 def should_alert_stop_loss(cycle_key: str) -> bool:
-    return _deduplicator.should_alert_stop_loss(cycle_key)
+    with _dedup_lock:
+        return _deduplicator.should_alert_stop_loss(cycle_key)
 
 def is_stop_loss_alerted(cycle_key: str) -> bool:
     """查询指定 cycle 的 STOP_LOSS 提醒是否已发送 (日报展示用, 只读)"""
-    return cycle_key in _deduplicator.stop_loss_alerted
+    with _dedup_lock:
+        return cycle_key in _deduplicator.stop_loss_alerted
 
 def clear_stop_loss(cycle_key: str) -> None:
-    _deduplicator.clear_stop_loss(cycle_key)
+    with _dedup_lock:
+        _deduplicator.clear_stop_loss(cycle_key)
 
 
 def reset_daily_dedup():
-    _deduplicator.reset_daily()
+    with _dedup_lock:
+        _deduplicator.reset_daily()
 
 
 def clear_dedup():
-    _deduplicator.clear()
+    with _dedup_lock:
+        _deduplicator.clear()
