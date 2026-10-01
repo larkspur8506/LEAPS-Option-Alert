@@ -7,11 +7,12 @@
 
 持仓退出 (先到先出):
   - RSI14 > TP 阈值 (默认 65): 止盈全部清仓
-  - 持仓超过 N 个交易日仍未回本 (默认 126): 时间止损
+  - 持仓超过 N 个交易日仍未回本 (默认关闭; 复测表明时间止损制造了历史唯二亏损)
   - 距到期 < N 天 (默认 180): DTE 强制平仓 (早期 app 的硬规则, 2y 合约约 1.5 年清)
+  - 总盈利 ≥ half_tp 比例 (默认 +50%, 0=关闭): 提醒卖出一半锁定利润 (HALF_TP, 仅提醒)
 
-加仓: 相对 signal_base_price 回撤达档位 (-10%/-20%) 且 RSI 仍 < 入场阈值,
-      最多加到 max_quantity 张。回测: 加仓将 p10 从 -21% 收窄到 -7%。
+加仓: 相对 signal_base_price 回撤达档位 (-15%/-25%) 且 RSI 仍 < 入场阈值,
+      最多加到 max_quantity 张。回测: 加仓将 p10 从 -21% 收窄到 +24%。
 """
 import logging
 from datetime import date, datetime, timedelta
@@ -110,6 +111,7 @@ def evaluate_position(position: Any, qqq_data: Dict[str, Any], config: Any,
         "pnl_pct": None,
         "breach": None,
         "add_trigger": None,
+        "half_tp_trigger": None,
     }
 
     entry_date = getattr(position, "entry_date", None)
@@ -178,6 +180,21 @@ def evaluate_position(position: Any, qqq_data: Dict[str, Any], config: Any,
     add_trigger = _check_add_trigger(position, qqq_data, config)
     if add_trigger:
         result["add_trigger"] = add_trigger
+
+    # --- 分批止盈提醒 (HALF_TP): 总盈利≥阈值 且 尚未提醒 且 张数≥2 (仅提醒, 不改状态) ---
+    half_tp = config.get_half_tp_pnl() if config is not None and hasattr(config, "get_half_tp_pnl") else None
+    pnl_pct = result.get("pnl_pct")
+    qty = int(getattr(position, "quantity", 0) or 0)
+    if (half_tp and half_tp > 0 and pnl_pct is not None
+            and pnl_pct / 100.0 >= half_tp and qty >= 2
+            and not int(getattr(position, "half_tp_alerted", 0) or 0)):
+        result["half_tp_trigger"] = {
+            "pnl_pct": float(pnl_pct),
+            "threshold": float(half_tp),
+            "quantity": qty,
+            "sell_qty": qty // 2,
+            "reason": f"总盈利 {pnl_pct:+.1f}% ≥ +{half_tp*100:.0f}%, 建议卖出一半 ({qty // 2}/{qty} 张) 锁定利润",
+        }
 
     return result
 

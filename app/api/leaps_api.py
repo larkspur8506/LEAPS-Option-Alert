@@ -9,6 +9,7 @@ REST endpoints for managing OptionPosition lifecycle:
     POST /api/leaps/{id}/confirm  - WAITING -> HOLDING (录入实际合约参数)
     POST /api/leaps/{id}/add-lot  - HOLDING 加仓 (累加张数/成本)
     POST /api/leaps/{id}/close    - HOLDING -> CLOSED (平仓记录)
+    POST /api/leaps/{id}/partial-close - HOLDING 部分平仓 (卖部分张数, 记 realized_premium)
     POST /api/leaps/{id}/dismiss  - WAITING -> DISMISSED
 
 Authentication reuses the existing admin cookie mechanism
@@ -116,6 +117,12 @@ class AddLotRequest(BaseModel):
 
 class ClosePositionRequest(BaseModel):
     close_premium: Optional[float] = None   # 平仓每张权利金 (可选记录)
+    notes: Optional[str] = None
+
+
+class PartialCloseRequest(BaseModel):
+    sell_qty: int                    # 本次卖出张数 (必须 < 当前张数)
+    sell_price: Optional[float] = None  # 每张卖出权利金 (可选记录)
     notes: Optional[str] = None
 
 
@@ -237,6 +244,22 @@ def close_position(position_id: int, payload: ClosePositionRequest,
     logger.info(f"[LEAPS API] Position #{rec.id} HOLDING -> CLOSED (MANUAL_CLOSE)")
     _notify_manual_close(rec)
     return {"status": "OK", "position_id": rec.id, "position_status": rec.status}
+
+
+@router.post("/{position_id}/partial-close")
+def partial_close_position(position_id: int, payload: PartialCloseRequest,
+                           request: Request, db: Session = Depends(get_db)):
+    try:
+        rec = leaps_service.partial_close(
+            db, position_id, payload.sell_qty, payload.sell_price, notes=payload.notes,
+        )
+    except Exception as e:
+        _raise_http(e)
+        raise
+    logger.info(f"[LEAPS API] Position #{rec.id} partial-close -> qty={rec.quantity}, "
+                f"realized={rec.realized_premium}")
+    return {"status": "OK", "position_id": rec.id, "quantity": rec.quantity,
+            "total_cost": rec.total_cost, "realized_premium": rec.realized_premium}
 
 
 @router.post("/{position_id}/dismiss")

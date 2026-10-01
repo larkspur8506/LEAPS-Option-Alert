@@ -68,6 +68,7 @@ class _FakeConfig:
         self.delta = kw.get("delta", 0.65)
         self.tenor = kw.get("tenor", 730)
         self.waiting_ttl = kw.get("waiting_ttl", 3)
+        self.half_tp = kw.get("half_tp", 0.5)
 
     def get_entry_rsi_threshold(self):
         return self.entry_rsi
@@ -95,6 +96,9 @@ class _FakeConfig:
 
     def get_waiting_ttl_trading_days(self):
         return self.waiting_ttl
+
+    def get_half_tp_pnl(self):
+        return self.half_tp
 
 
 # ===========================================================================
@@ -151,6 +155,8 @@ class _Pos:
         self.quantity = kw.get("quantity", 1)
         self.add_count = kw.get("add_count", 0)
         self.signal_base_price = kw.get("signal_base_price", 480.0)
+        self.half_tp_alerted = kw.get("half_tp_alerted", False)
+        self.realized_premium = kw.get("realized_premium", None)
 
 
 class TestExitRules(unittest.TestCase):
@@ -193,6 +199,60 @@ class TestExitRules(unittest.TestCase):
         pos = _Pos(entry_date=date.today() - timedelta(days=30), current_premium=110.0)
         out = evaluate_position(pos, _make_qqq(closed_rsi=50.0), self._cfg())
         self.assertIsNone(out["breach"])
+
+
+# ===========================================================================
+# 2b. 分批止盈提醒 (HALF_TP)
+# ===========================================================================
+
+class TestHalfTpTrigger(unittest.TestCase):
+    def _cfg(self, **kw):
+        return _FakeConfig(**kw)
+
+    def test_1_triggers_at_threshold(self):
+        from app.alerts.qqq_rules import evaluate_position
+
+        # +60% >= +50%, 2 张, 未提醒过 -> 触发, 卖 1 留 1
+        pos = _Pos(quantity=2, current_premium=160.0)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=50.0), self._cfg())
+        self.assertIsNotNone(out["half_tp_trigger"])
+        self.assertEqual(out["half_tp_trigger"]["sell_qty"], 1)
+        self.assertEqual(out["half_tp_trigger"]["quantity"], 2)
+        # 仅提醒: 不产生 breach
+        self.assertIsNone(out["breach"])
+
+    def test_2_not_reached_or_single_lot(self):
+        from app.alerts.qqq_rules import evaluate_position
+
+        # +30% < +50% -> 不触发
+        pos = _Pos(quantity=2, current_premium=130.0)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=50.0), self._cfg())
+        self.assertIsNone(out["half_tp_trigger"])
+        # 达标但只有 1 张 -> 无法卖半, 不触发
+        pos = _Pos(quantity=1, current_premium=160.0)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=50.0), self._cfg())
+        self.assertIsNone(out["half_tp_trigger"])
+
+    def test_3_disabled_and_already_alerted(self):
+        from app.alerts.qqq_rules import evaluate_position
+
+        # half_tp=0 关闭
+        pos = _Pos(quantity=2, current_premium=160.0)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=50.0), self._cfg(half_tp=0.0))
+        self.assertIsNone(out["half_tp_trigger"])
+        # 已提醒过 -> 不再触发
+        pos = _Pos(quantity=2, current_premium=160.0, half_tp_alerted=True)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=50.0), self._cfg())
+        self.assertIsNone(out["half_tp_trigger"])
+
+    def test_4_rsi_tp_takes_priority(self):
+        from app.alerts.qqq_rules import evaluate_position
+
+        # RSI 70 + 盈利达标 -> 只报 RSI_TP breach, 不给 half_tp (先到先出)
+        pos = _Pos(quantity=2, current_premium=160.0)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=70.0), self._cfg())
+        self.assertEqual(out["breach"]["type"], "RSI_TP")
+        self.assertIsNone(out["half_tp_trigger"])
 
 
 # ===========================================================================
@@ -465,6 +525,88 @@ class LeapsEndToEndTest(unittest.TestCase):
         held = self.db.query(OptionPosition).filter(OptionPosition.id == rec.id).first()
         self.assertEqual(held.status, "CLOSED")
 
+    def test_8b_partial_close_flow(self):
+        """部分平仓: 张数/成本按比例更新, realized_premium 累计, 不允许卖光。"""
+        from app.services import leaps_service
+        from app.alerts.qqq_rules import check_entry_signal
+        from app.services.leaps_service import OptionParameterError
+
+        sig = check_entry_signal(_make_qqq())
+        rec = leaps_service.create_waiting_position(self.db, sig, _FakeConfig())
+        leaps_service.confirm_entry(
+            self.db, rec.id, strike=450.0,
+            expiration=date.today() + timedelta(days=700),
+            entry_price=100.0, quantity=3,
+        )
+        out = leaps_service.partial_close(self.db, rec.id, sell_qty=1, sell_price=180.0)
+        self.assertEqual(out.quantity, 2)
+        self.assertAlmostEqual(out.total_cost, 200.0)   # 300 × 2/3
+        self.assertAlmostEqual(out.realized_premium, 180.0)
+        self.assertTrue(out.half_tp_alerted)
+        self.assertEqual(out.status, "HOLDING")
+
+        # 再加仓一次 (成本口径继续累加) 后尝试卖光 -> 400
+        leaps_service.add_lot(self.db, rec.id, add_price=120.0, quantity=1)
+        with self.assertRaises(OptionParameterError):
+            leaps_service.partial_close(self.db, rec.id, sell_qty=3)
+
+        # API 通道
+        res = self.client.post(f"/api/leaps/{rec.id}/partial-close",
+                               json={"sell_qty": 1, "sell_price": 150.0})
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["quantity"], 2)
+        self.assertAlmostEqual(body["realized_premium"], 330.0)  # 180 + 150
+
+    def test_8c_monitor_half_tp_alert_once(self):
+        """盈利达标 -> HALF_TP 提醒一次 (position 仍 HOLDING), 且不重复发。"""
+        from app.alerts.leaps_monitor import process_leaps_position
+        from app.services import leaps_service
+        from app.alerts.qqq_rules import check_entry_signal
+        from unittest.mock import patch
+        from app.database.models import AlertLog
+
+        sig = check_entry_signal(_make_qqq())
+        rec = leaps_service.create_waiting_position(self.db, sig, _FakeConfig())
+        leaps_service.confirm_entry(
+            self.db, rec.id, strike=450.0,
+            expiration=date.today() + timedelta(days=700),
+            entry_price=100.0, quantity=2,
+        )
+        from app.database.models import OptionPosition
+        held = self.db.query(OptionPosition).filter(OptionPosition.id == rec.id).first()
+        held.current_premium = 160.0   # +60% ≥ +50%
+        self.db.commit()
+
+        # 假 notifier: _notify_with_log 约定 notifier=None 不落 AlertLog
+        class _FakeNotifier:
+            def send_message(self, message):
+                return True
+
+        with patch("app.alerts.leaps_monitor._is_data_fresh", return_value=True):
+            out = process_leaps_position(self.db, _make_qqq(), notifier=_FakeNotifier(),
+                                         config=_FakeConfig())
+        self.assertEqual(out["action"], "HALF_TP_ALERTED")
+
+        held = self.db.query(OptionPosition).filter(OptionPosition.id == rec.id).first()
+        self.assertEqual(held.status, "HOLDING")   # 仅提醒, 状态不变
+        self.assertTrue(held.half_tp_alerted)
+
+        alerts = self.db.query(AlertLog).filter(
+            AlertLog.alert_type == "LEAPS_HALF_TP",
+            AlertLog.position_id == rec.id).all()
+        self.assertEqual(len(alerts), 1)
+
+        # 再跑一轮: 不重复提醒 (落库去重), 走 HOLDING_MONITORED
+        with patch("app.alerts.leaps_monitor._is_data_fresh", return_value=True):
+            out2 = process_leaps_position(self.db, _make_qqq(current_premium=170.0), notifier=None,
+                                          config=_FakeConfig())
+        self.assertEqual(out2["action"], "HOLDING_MONITORED")
+        alerts2 = self.db.query(AlertLog).filter(
+            AlertLog.alert_type == "LEAPS_HALF_TP",
+            AlertLog.position_id == rec.id).all()
+        self.assertEqual(len(alerts2), 1)
+
     def test_9_dashboard_fresh_flag_injected(self):
         """P1 回归: 新鲜度由聚合层/监控判定注入后, 新鲜数据走正常信号路径 (不再恒 stale)"""
         from unittest.mock import patch
@@ -498,8 +640,8 @@ class LeapsEndToEndTest(unittest.TestCase):
         self.assertIn("dte", s)
         self.assertAlmostEqual(s["dte"], 700, delta=2)
         # qty=1 < max 3, add_count=0 < len(levels): 下一档信息应存在
-        self.assertAlmostEqual(s["next_add_level_pct"], 0.10)
-        self.assertAlmostEqual(s["next_add_trigger_price"], 480.0 * 0.9, places=2)
+        self.assertAlmostEqual(s["next_add_level_pct"], 0.15)
+        self.assertAlmostEqual(s["next_add_trigger_price"], 480.0 * 0.85, places=2)
 
 
 # ===========================================================================

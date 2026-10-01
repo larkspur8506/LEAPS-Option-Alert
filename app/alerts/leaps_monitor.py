@@ -29,6 +29,7 @@ from app.notification.wechat import (
     format_leaps_waiting_expired,
     format_leaps_add_lot,
     format_leaps_exit,
+    format_leaps_half_tp,
 )
 from app.scheduler.trading_hours import get_latest_trading_day
 
@@ -158,6 +159,24 @@ def _add_dedup_key(position_id: int, level_index: int) -> str:
     return f"LEAPS_ADD_LOT_pos_{position_id}_lvl_{level_index}"
 
 
+def _half_tp_alerted_in_db(db: Session, position_id: int) -> bool:
+    """落库级 HALF_TP 去重 (进程重启后仍生效): 该仓位是否已发过卖半提醒。"""
+    from app.database.models import AlertLog
+    try:
+        row = (
+            db.query(AlertLog)
+            .filter(
+                AlertLog.alert_type == "LEAPS_HALF_TP",
+                AlertLog.position_id == position_id,
+            )
+            .first()
+        )
+        return row is not None
+    except Exception as e:
+        logger.warning(f"[LEAPS Monitor] half-tp dedup query failed: {e}")
+        return False
+
+
 def _add_already_alerted(db: Session, position_id: int, next_count: int) -> bool:
     """落库级去重查询 (进程重启后仍生效): 该仓位是否已发过"加到 next_count 张"的提醒。"""
     from app.database.models import AlertLog
@@ -224,6 +243,21 @@ def process_leaps_position(
             message = format_leaps_exit(rec, breach, qqq_data)
             _notify_with_log(db, notifier, message, f"LEAPS_{btype}", f"LEAPS {btype}", position_id=rec.id)
             return {"status": "OK", "action": "CLOSED", "reason": btype, "position_id": rec.id}
+
+        # 分批止盈提醒 (HALF_TP): 仅提醒, 不改仓位状态; 优先级在加仓提醒之前
+        half_tp_trigger = evaluation.get("half_tp_trigger")
+        if half_tp_trigger and not _half_tp_alerted_in_db(db, holding.id) \
+                and dedup.should_alert(f"LEAPS_HALF_TP_pos_{holding.id}"):
+            message = format_leaps_half_tp(holding, half_tp_trigger, qqq_data)
+            _notify_with_log(db, notifier, message, "LEAPS_HALF_TP", "LEAPS 分批止盈提醒",
+                             position_id=holding.id)
+            try:
+                holding.half_tp_alerted = True
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.warning(f"[LEAPS Monitor] half_tp_alerted flag update skipped: {e}")
+            return {"status": "OK", "action": "HALF_TP_ALERTED", "position_id": holding.id}
 
         add_trigger = evaluation.get("add_trigger")
         if add_trigger:

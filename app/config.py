@@ -54,22 +54,22 @@ class Config:
         return self._float("leaps_tp_rsi", "LEAPS_TP_RSI", 65.0)
 
     def get_time_stop_trading_days(self) -> int:
-        """时间止损: 持仓 N 个交易日仍未回本 -> 提醒平仓 (回测 126)"""
-        return self._int("leaps_time_stop_trading_days", "LEAPS_TIME_STOP_TRADING_DAYS", 126)
+        """时间止损: 持仓 N 个交易日仍未回本 -> 提醒平仓 (0 = 关闭; 2026-10 复测: ts 制造唯二亏损, 默认禁用)"""
+        return self._int("leaps_time_stop_trading_days", "LEAPS_TIME_STOP_TRADING_DAYS", 0)
 
     def get_dte_force_days(self) -> int:
         """DTE 强制平仓: 距到期 N 个自然日强制提醒 (沿用早期 app 的 180)"""
         return self._int("leaps_dte_force_days", "LEAPS_DTE_FORCE_DAYS", 180)
 
     def get_add_levels(self) -> list:
-        """加仓回撤档位列表 (相对 signal_base_price), 默认 -10% / -20%"""
+        """加仓回撤档位列表 (相对 signal_base_price), 默认 -15% / -25% (2026-10 复测定稿)"""
         raw = None
         try:
             raw = self._db_config.get("leaps_add_levels")
         except Exception:
             raw = None
         if not raw:
-            raw = os.getenv("LEAPS_ADD_LEVELS", "0.10,0.20")
+            raw = os.getenv("LEAPS_ADD_LEVELS", "0.15,0.25")
         levels = []
         for part in str(raw).split(","):
             try:
@@ -78,7 +78,7 @@ class Config:
                     levels.append(v)
             except ValueError:
                 continue
-        return levels or [0.10, 0.20]
+        return levels or [0.15, 0.25]
 
     def get_max_quantity(self) -> int:
         """单信号最大张数 (首张 + 加仓), 默认 3"""
@@ -92,6 +92,10 @@ class Config:
     def get_target_tenor_days(self) -> int:
         """建议期限 (自然日, 默认约 2 年 = 730)"""
         return self._int("leaps_target_tenor_days", "LEAPS_TARGET_TENOR_DAYS", 730)
+
+    def get_half_tp_pnl(self) -> float:
+        """分批止盈: 总盈利≥该比例时提醒卖出一半 (0 = 关闭; 2026-10 复测定稿 0.5)"""
+        return self._float("leaps_half_tp_pnl", "LEAPS_HALF_TP_PNL", 0.5)
 
     # ---- 每日 16:30 日报模式 ----
     DAILY_REPORT_MODES = ("off", "leaps")
@@ -141,6 +145,7 @@ def load_config_from_db(db) -> Config:
             "leaps_max_quantity": getattr(row, "leaps_max_quantity", None),
             "leaps_target_delta": getattr(row, "leaps_target_delta", None),
             "leaps_target_tenor_days": getattr(row, "leaps_target_tenor_days", None),
+            "leaps_half_tp_pnl": getattr(row, "leaps_half_tp_pnl", None),
         })
     except Exception:
         return get_config()

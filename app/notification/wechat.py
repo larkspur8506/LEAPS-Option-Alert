@@ -302,6 +302,47 @@ def format_leaps_exit(position: Any, breach: Dict[str, Any], qqq_data: Dict[str,
     return "\n".join(lines)
 
 
+def format_leaps_half_tp(position: Any, half_tp_trigger: Dict[str, Any],
+                         qqq_data: Dict[str, Any], now: Optional[datetime] = None) -> str:
+    """💰 LEAPS 分批止盈提醒 (总盈利≥阈值, 建议卖出一半; 仅提醒, 不改仓位状态)"""
+    qqq_data = qqq_data or {}
+    sell_qty = int((half_tp_trigger or {}).get("sell_qty") or 0)
+    qty = int((half_tp_trigger or {}).get("quantity") or 0)
+    entry = _get(position, "entry_price")
+    pnl = _get(position, "current_premium")
+    pnl_text = "N/A"
+    if _is_num(pnl) and _is_num(entry) and entry > 0:
+        pnl_text = f"{(pnl / entry - 1) * 100:+.1f}%"
+
+    lines = [
+        "💰 QQQ LEAPS 分批止盈提醒",
+        SEPARATOR,
+        f"📅 {_fmt_date_cn(now, with_time=True)}",
+        "",
+        f"✅ 总盈利已达 +{(half_tp_trigger or {}).get('threshold', 0.5) * 100:.0f}%, 建议卖出一半锁定利润",
+        f"（{(half_tp_trigger or {}).get('reason') or 'N/A'}）",
+        "",
+    ]
+    lines += _market_section(qqq_data.get("last_price"), qqq_data)
+    lines += [
+        "",
+        "📐 当前仓位",
+        f"合约：QQQ Call {_fmt_price(_get(position, 'strike'))} @ "
+        f"{_get(position, 'expiration_date') or 'N/A'}",
+        f"张数：{_fmt_num(_get(position, 'quantity'), 0)} (建议卖出 {sell_qty} 张, 保留 {qty - sell_qty} 张)",
+        f"入场权利金：{_fmt_price(entry)} / 张",
+        f"最新权利金：{_fmt_price(pnl)} (PnL {pnl_text})",
+        "",
+        "💡 操作提示",
+        f"如执行请在券商卖出 {sell_qty} 张, 然后到后台「持仓页」点「部分平仓」录入实际卖出价;",
+        "剩余仓位继续按 RSI 止盈 / DTE 风控跟踪。",
+        "",
+        SEPARATOR,
+        "⚠️ 本系统仅提供提醒, 不连接券商, 不自动交易。",
+    ]
+    return "\n".join(lines)
+
+
 def format_leaps_data_stale(data_timestamp: Any = None, now: Optional[datetime] = None) -> str:
     """⚠️ 数据过期 (fail-closed: 监控跳过, 不触发任何信号)"""
     ts_text = str(data_timestamp) if data_timestamp else "N/A"
@@ -435,8 +476,11 @@ def format_leaps_daily_report(data: Dict, now: Optional[datetime] = None) -> str
         hd = summary.get("holding_days")
         if _is_num(hd):
             ts_days = strategy.get("time_stop_days")
-            ts_text = f" / 止损 {ts_days} 交易日" if _is_num(ts_days) else ""
+            ts_text = f" / 止损 {ts_days} 交易日" if _is_num(ts_days) and ts_days > 0 else ""
             lines.append(f"已持仓：{int(hd)} 个交易日{ts_text}")
+        realized = holding.get("realized_premium")
+        if _is_num(realized) and realized != 0:
+            lines.append(f"已落袋：{realized:.2f} (部分平仓累计卖出权利金)")
         dte = summary.get("dte")
         if _is_num(dte):
             dte_force = strategy.get("dte_force_days")

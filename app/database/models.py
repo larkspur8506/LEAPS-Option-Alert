@@ -28,6 +28,7 @@ class Configuration(Base):
     leaps_max_quantity = Column(Integer, nullable=True)      # 单信号最大张数 (默认 3)
     leaps_target_delta = Column(Float, nullable=True)        # 建议 Delta (默认 0.65)
     leaps_target_tenor_days = Column(Integer, nullable=True) # 建议期限 (默认 730 天)
+    leaps_half_tp_pnl = Column(Float, nullable=True)         # 分批止盈: PnL≥该比例提醒卖半 (0=关闭, 默认 0.5)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -88,6 +89,8 @@ class OptionPosition(Base):
     current_premium = Column(Float, nullable=True)      # 最新每张权利金 (yfinance 期权链, 尽力而为)
     premium_updated_at = Column(DateTime, nullable=True)
     max_pnl_pct = Column(Float, default=0.0)            # 持仓期间最高 PnL% (展示)
+    realized_premium = Column(Float, nullable=True)     # 部分平仓累计已卖出权利金
+    half_tp_alerted = Column(Boolean, default=False, nullable=False)  # 分批止盈提醒已发
     closed_at = Column(DateTime, nullable=True)
     close_reason = Column(String(100), nullable=True)   # RSI_TP / TIME_STOP / DTE_FORCE / MANUAL_CLOSE
     close_premium = Column(Float, nullable=True)        # 平仓总权利金 (用户录入, 仅记录)

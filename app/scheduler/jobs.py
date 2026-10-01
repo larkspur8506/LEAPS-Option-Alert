@@ -97,8 +97,9 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
     # 策略参数 (来自运行时配置, 与 rules 页展示一致)
     strategy = {
         "entry_rsi": 35.0, "tp_rsi": 65.0,
-        "time_stop_days": 126, "dte_force_days": 180,
+        "time_stop_days": 0, "dte_force_days": 180,
         "target_delta": 0.65, "target_tenor_days": 730,
+        "half_tp_pnl": 0.5,
     }
     if config:
         try:
@@ -109,6 +110,7 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
                 "dte_force_days": config.get_dte_force_days(),
                 "target_delta": config.get_target_delta(),
                 "target_tenor_days": config.get_target_tenor_days(),
+                "half_tp_pnl": config.get_half_tp_pnl() if hasattr(config, "get_half_tp_pnl") else 0.5,
             }
         except Exception as e:
             logger.warning(f"DAILY_REPORT strategy config fallback to defaults: {e}")

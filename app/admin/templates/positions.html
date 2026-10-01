@@ -145,6 +145,10 @@
                 class="w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
                 平仓归档 (HOLDING → CLOSED)
             </button>
+            <button onclick="openPartialModal()"
+                class="w-full sm:w-auto mt-2 sm:mt-0 sm:ml-3 bg-amber-500 hover:bg-amber-600 text-white px-6 py-3 rounded-xl text-sm font-semibold shadow-sm transition-all active:scale-95">
+                部分平仓 (卖出部分张数)
+            </button>
         </div>
     </div>
     {% endif %}
@@ -259,6 +263,24 @@
     </div>
 </div>
 
+<!-- 部分平仓弹窗 -->
+<div id="partial-modal" class="hidden fixed inset-0 z-50 overflow-y-auto bg-black/40">
+    <div class="flex items-center justify-center min-h-screen p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <h3 class="text-lg font-bold text-gray-900 mb-2">确认部分平仓</h3>
+            <p class="text-sm text-gray-600 mb-4">记录已卖出部分张数 (剩余至少 1 张)。<br><span class="text-xs text-gray-400">此操作不会操作券商, 只会更新系统中的张数与成本。</span></p>
+            <label class="block text-xs font-medium text-gray-500 mb-1">卖出张数 (当前 {{ holding.quantity if holding else "-" }} 张)</label>
+            <input id="pc-qty" type="number" step="1" min="1" placeholder="如 1" class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 mb-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+            <label class="block text-xs font-medium text-gray-500 mb-1">每张卖出权利金 (可选记录)</label>
+            <input id="pc-price" type="number" step="0.01" placeholder="留空则不记录" class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 mb-6 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+            <div class="flex justify-end gap-3">
+                <button onclick="closePartialModal()" class="bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 px-5 py-2.5 rounded-xl text-sm font-medium transition-all">取消</button>
+                <button id="pc-submit" onclick="submitPartial({{ holding.id if holding else 'null' }})" class="bg-amber-500 hover:bg-amber-600 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-all">确认部分平仓</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
     // ============================================================
     // 纯展示层: 只负责数值格式化与 API 调用。
@@ -352,6 +374,36 @@
     // ---- 平仓弹窗 ----
     function openCloseModal() { $("close-modal").classList.remove("hidden"); }
     function closeCloseModal() { $("close-modal").classList.add("hidden"); }
+
+    // ---- 部分平仓弹窗 ----
+    function openPartialModal() { $("partial-modal").classList.remove("hidden"); }
+    function closePartialModal() { $("partial-modal").classList.add("hidden"); }
+
+    async function submitPartial(positionId) {
+        if (!positionId) { showToast("当前没有 HOLDING 仓位", "error"); return; }
+        const rawQty = $("pc-qty").value.trim();
+        const q = parseInt(rawQty, 10);
+        if (!Number.isFinite(q) || q < 1) { showToast("卖出张数必须为正整数", "error"); return; }
+        if (!confirm(`确认已部分卖出 ${q} 张?\n剩余张数将更新为当前张数减 ${q} (至少保留 1 张)。`)) return;
+        const payload = { sell_qty: q };
+        const rawPrice = $("pc-price").value.trim();
+        if (rawPrice) {
+            const v = parseFloat(rawPrice);
+            if (!Number.isFinite(v) || v <= 0) { showToast("卖出权利金必须为正数或留空", "error"); return; }
+            payload.sell_price = v;
+        }
+        const btn = $("pc-submit");
+        btn.disabled = true; btn.classList.add("opacity-50");
+        try {
+            const res = await apiFetch(`/api/leaps/${positionId}/partial-close`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) location.reload();
+        } catch (e) { /* apiFetch 已提示 */ }
+        finally { btn.disabled = false; btn.classList.remove("opacity-50"); }
+    }
 
     async function submitClose(positionId) {
         if (!positionId) { showToast("当前没有 HOLDING 仓位", "error"); return; }

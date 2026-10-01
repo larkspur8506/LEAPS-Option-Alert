@@ -117,6 +117,8 @@ def confirm_entry(db: Session, position_id: int, strike: float, expiration: date
     rec.quantity = int(quantity)
     rec.total_cost = float(entry_price) * int(quantity)
     rec.entry_date = date.today()
+    rec.realized_premium = 0.0
+    rec.half_tp_alerted = False
     if notes:
         rec.notes = notes
     db.commit()
@@ -188,6 +190,40 @@ def close_position(db: Session, position_id: int, reason: str,
         rec.close_premium = float(close_premium)
     if notes:
         rec.notes = f"{rec.notes}\n{notes}" if rec.notes else notes
+    db.commit()
+    db.refresh(rec)
+    return rec
+
+
+def partial_close(db: Session, position_id: int, sell_qty: int, sell_price: Optional[float] = None,
+                  reason: str = "HALF_TP", notes: Optional[str] = None) -> OptionPosition:
+    """HOLDING 部分平仓: 卖出 sell_qty 张, 剩余张数≥1 (用户确认已部分卖出后调用)。
+
+    记账口径: realized_premium 累计已卖出权利金 (每张卖出价×张数),
+    total_cost 按剩余张数比例摊薄; 监控层的 HALF_TP 仅提醒, 不调用本函数。
+    """
+    rec = db.query(OptionPosition).filter(OptionPosition.id == position_id).first()
+    if not rec:
+        raise OptionPositionNotFoundError(f"OptionPosition {position_id} not found.")
+    if rec.status != "HOLDING":
+        raise OptionPositionStateError(f"Illegal transition: partial close on {rec.status} (must be HOLDING).")
+    if sell_qty is None or sell_qty < 1:
+        raise OptionParameterError("sell_qty must be >= 1.")
+    if rec.quantity is None or sell_qty >= int(rec.quantity):
+        raise OptionParameterError(
+            f"sell_qty must be < current quantity ({rec.quantity}); 全部平仓请用 close 接口。")
+
+    orig_qty = int(rec.quantity)
+    realized = float(rec.realized_premium or 0.0)
+    if sell_price is not None and sell_price > 0:
+        realized += float(sell_price) * int(sell_qty)
+    rec.realized_premium = realized
+    rec.quantity = orig_qty - int(sell_qty)
+    rem_ratio = float(rec.quantity) / orig_qty
+    rec.total_cost = float(rec.total_cost or 0.0) * rem_ratio
+    if notes:
+        rec.notes = f"{rec.notes}\n{notes}" if rec.notes else notes
+    rec.half_tp_alerted = True
     db.commit()
     db.refresh(rec)
     return rec
@@ -272,6 +308,7 @@ def get_leaps_dashboard(db: Session, qqq_data: Optional[Dict[str, Any]]) -> Dict
             "entry_date": rec.entry_date.isoformat() if rec.entry_date else None,
             "add_count": rec.add_count,
             "current_premium": rec.current_premium,
+            "realized_premium": getattr(rec, "realized_premium", None),
             "close_reason": rec.close_reason,
             "created_at": str(rec.created_at)[:19] if rec.created_at else None,
         }

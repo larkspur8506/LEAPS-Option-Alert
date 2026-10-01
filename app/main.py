@@ -91,6 +91,7 @@ def _build_config_dict(config_db: Configuration) -> dict:
         "leaps_max_quantity": getattr(config_db, 'leaps_max_quantity', None),
         "leaps_target_delta": getattr(config_db, 'leaps_target_delta', None),
         "leaps_target_tenor_days": getattr(config_db, 'leaps_target_tenor_days', None),
+        "leaps_half_tp_pnl": getattr(config_db, 'leaps_half_tp_pnl', None),
     }
 
 
@@ -407,6 +408,7 @@ async def rules(request: Request, db: Session = Depends(get_db)):
         "max_quantity": runtime_config.get_max_quantity(),
         "target_delta": runtime_config.get_target_delta(),
         "target_tenor_days": runtime_config.get_target_tenor_days(),
+        "half_tp_pnl": runtime_config.get_half_tp_pnl(),
         "waiting_ttl_trading_days": runtime_config.get_waiting_ttl_trading_days(),
         # 每日日报模式 (运行时配置, 默认 leaps)
         "daily_report_mode": runtime_config.get_daily_report_mode(),
@@ -439,6 +441,7 @@ async def update_strategy(
     max_quantity: str = Form("3"),
     target_delta: str = Form("0.65"),
     target_tenor_days: str = Form("730"),
+    half_tp_pnl: str = Form("0.5"),
     db: Session = Depends(get_db),
 ):
     """保存 LEAPS 策略参数 (后台可调; 数值非法时后端静默回退当前值)。"""
@@ -455,6 +458,8 @@ async def update_strategy(
         config_db.leaps_max_quantity = max(1, _parse_int(max_quantity, current.get_max_quantity()))
         config_db.leaps_target_delta = _parse_float(target_delta, current.get_target_delta())
         config_db.leaps_target_tenor_days = _parse_int(target_tenor_days, current.get_target_tenor_days())
+        half_val = _parse_float(half_tp_pnl, current.get_half_tp_pnl())
+        config_db.leaps_half_tp_pnl = max(0.0, half_val) if half_val is not None else 0.0
         db.commit()
         refresh_global_config(db)
         logger.info("[INFO] LEAPS strategy params updated")
