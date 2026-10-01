@@ -22,12 +22,12 @@ class Configuration(Base):
 
     # ---- LEAPS 策略参数 (后台可调, DB 优先于 env) ----
     leaps_tp_rsi = Column(Float, nullable=True)              # 止盈 RSI (默认 65)
-    leaps_time_stop_trading_days = Column(Integer, nullable=True)  # 时间止损 (默认 126 交易日)
-    leaps_dte_force_days = Column(Integer, nullable=True)    # DTE 强制平仓 (默认 180 天)
-    leaps_add_levels = Column(String(50), nullable=True)     # 加仓回撤档 "0.10,0.20"
+    leaps_time_stop_trading_days = Column(Integer, nullable=True)  # 时间止损交易日 (0/NULL=关闭; 复测默认禁用)
+    leaps_dte_force_days = Column(Integer, nullable=True)    # DTE 强制平仓 (默认 90 天, 1y 合约配套)
+    leaps_add_levels = Column(String(50), nullable=True)     # 加仓回撤档 "0.15,0.25"
     leaps_max_quantity = Column(Integer, nullable=True)      # 单信号最大张数 (默认 3)
     leaps_target_delta = Column(Float, nullable=True)        # 建议 Delta (默认 0.65)
-    leaps_target_tenor_days = Column(Integer, nullable=True) # 建议期限 (默认 730 天)
+    leaps_target_tenor_days = Column(Integer, nullable=True) # 建议期限 (默认 365 天 ≈ 1 年)
     leaps_half_tp_pnl = Column(Float, nullable=True)         # 分批止盈: PnL≥该比例提醒卖半 (0=关闭, 默认 0.5)
 
     created_at = Column(DateTime, server_default=func.now())

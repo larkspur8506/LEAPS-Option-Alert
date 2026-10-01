@@ -58,8 +58,8 @@ class Config:
         return self._int("leaps_time_stop_trading_days", "LEAPS_TIME_STOP_TRADING_DAYS", 0)
 
     def get_dte_force_days(self) -> int:
-        """DTE 强制平仓: 距到期 N 个自然日强制提醒 (沿用早期 app 的 180)"""
-        return self._int("leaps_dte_force_days", "LEAPS_DTE_FORCE_DAYS", 180)
+        """DTE 强制平仓: 距到期 N 个自然日强制提醒 (2026-10 复测: 1y 合约配 90, 避免慢修复交易被卡在 theta 加速区)"""
+        return self._int("leaps_dte_force_days", "LEAPS_DTE_FORCE_DAYS", 90)
 
     def get_add_levels(self) -> list:
         """加仓回撤档位列表 (相对 signal_base_price), 默认 -15% / -25% (2026-10 复测定稿)"""
@@ -90,8 +90,8 @@ class Config:
         return self._float("leaps_target_delta", "LEAPS_TARGET_DELTA", 0.65)
 
     def get_target_tenor_days(self) -> int:
-        """建议期限 (自然日, 默认约 2 年 = 730)"""
-        return self._int("leaps_target_tenor_days", "LEAPS_TARGET_TENOR_DAYS", 730)
+        """建议期限 (自然日, 2026-10 复测定稿约 1 年 = 365)"""
+        return self._int("leaps_target_tenor_days", "LEAPS_TARGET_TENOR_DAYS", 365)
 
     def get_half_tp_pnl(self) -> float:
         """分批止盈: 总盈利≥该比例时提醒卖出一半 (0 = 关闭; 2026-10 复测定稿 0.5)"""

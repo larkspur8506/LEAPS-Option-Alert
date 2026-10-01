@@ -18,10 +18,10 @@ SEPARATOR = "━━━━━━━━━━━━━━"
 
 DEFAULT_ENTRY_RSI = 35.0
 DEFAULT_TP_RSI = 65.0
-DEFAULT_TIME_STOP_DAYS = 126
-DEFAULT_DTE_FORCE_DAYS = 180
+DEFAULT_TIME_STOP_DAYS = 0
+DEFAULT_DTE_FORCE_DAYS = 90
 DEFAULT_TARGET_DELTA = 0.65
-DEFAULT_TARGET_TENOR_DAYS = 730
+DEFAULT_TARGET_TENOR_DAYS = 365
 
 
 def _redact_secrets(text: str) -> str:
@@ -106,20 +106,20 @@ def _market_section(current_price: Any, indicators: Dict[str, Any]) -> list:
 
 
 def _suggest_contract_lines(position: Any) -> list:
-    """建议合约区块 (0.65Δ / 约2年 LEAPS call)"""
+    """建议合约区块 (0.65Δ / 约18个月 LEAPS call)"""
     delta = _get(position, "suggested_delta", DEFAULT_TARGET_DELTA)
     tenor = _get(position, "suggested_tenor_days", DEFAULT_TARGET_TENOR_DAYS)
     return [
         "📐 建议合约 (仅供参考)",
         f"类型：QQQ Call (LEAPS)",
         f"Delta：≈ {_fmt_num(delta)} (轻微实值)",
-        f"期限：≈ {int(tenor)} 天 (约 {tenor/365:.0f} 年) 到期",
+        f"期限：≈ {int(tenor)} 天 (约 {tenor/365*12:.0f} 个月) 到期",
         "张数：1 张起 (回落加仓, 见下方计划)",
     ]
 
 
 def _add_plan_lines(add_levels: Any, max_qty: Any) -> list:
-    levels = add_levels if isinstance(add_levels, (list, tuple)) else [0.10, 0.20]
+    levels = add_levels if isinstance(add_levels, (list, tuple)) else [0.15, 0.25]
     level_text = " / ".join(f"-{_fmt_pct_compact(l)}" for l in levels)
     return [
         "➕ 加仓计划",
@@ -129,12 +129,14 @@ def _add_plan_lines(add_levels: Any, max_qty: Any) -> list:
 
 
 def _exit_rules_lines(tp_rsi: Any, ts_days: Any, dte_force: Any) -> list:
-    return [
+    lines = [
         "🚪 退出规则 (先到先出)",
         f"止盈：RSI(14) > {_fmt_num(tp_rsi, 0)}",
-        f"时间止损：持仓 {_fmt_num(ts_days, 0)} 个交易日仍未回本",
-        f"到期风控：距到期 < {_fmt_num(dte_force, 0)} 天强制提醒",
     ]
+    if _is_num(ts_days) and ts_days > 0:
+        lines.append(f"时间止损：持仓 {_fmt_num(ts_days, 0)} 个交易日仍未回本")
+    lines.append(f"到期风控：距到期 < {_fmt_num(dte_force, 0)} 天强制提醒")
+    return lines
 
 
 # ---------------------------------------------------------------------------

@@ -97,8 +97,8 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
     # 策略参数 (来自运行时配置, 与 rules 页展示一致)
     strategy = {
         "entry_rsi": 35.0, "tp_rsi": 65.0,
-        "time_stop_days": 0, "dte_force_days": 180,
-        "target_delta": 0.65, "target_tenor_days": 730,
+        "time_stop_days": 0, "dte_force_days": 90,
+        "target_delta": 0.65, "target_tenor_days": 365,
         "half_tp_pnl": 0.5,
     }
     if config:

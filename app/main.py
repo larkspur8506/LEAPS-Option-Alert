@@ -437,10 +437,10 @@ async def update_strategy(
     tp_rsi: str = Form(...),
     time_stop_days: str = Form(...),
     dte_force_days: str = Form(...),
-    add_levels: str = Form("0.10,0.20"),
+    add_levels: str = Form("0.15,0.25"),
     max_quantity: str = Form("3"),
     target_delta: str = Form("0.65"),
-    target_tenor_days: str = Form("730"),
+    target_tenor_days: str = Form("365"),
     half_tp_pnl: str = Form("0.5"),
     db: Session = Depends(get_db),
 ):
@@ -454,7 +454,7 @@ async def update_strategy(
         config_db.leaps_tp_rsi = _parse_float(tp_rsi, current.get_tp_rsi())
         config_db.leaps_time_stop_trading_days = _parse_int(time_stop_days, current.get_time_stop_trading_days())
         config_db.leaps_dte_force_days = _parse_int(dte_force_days, current.get_dte_force_days())
-        config_db.leaps_add_levels = str(add_levels).strip() or "0.10,0.20"
+        config_db.leaps_add_levels = str(add_levels).strip() or "0.15,0.25"
         config_db.leaps_max_quantity = max(1, _parse_int(max_quantity, current.get_max_quantity()))
         config_db.leaps_target_delta = _parse_float(target_delta, current.get_target_delta())
         config_db.leaps_target_tenor_days = _parse_int(target_tenor_days, current.get_target_tenor_days())

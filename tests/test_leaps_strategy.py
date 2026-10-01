@@ -60,13 +60,13 @@ class _FakeConfig:
 
     def __init__(self, **kw):
         self.tp_rsi = kw.get("tp_rsi", 65.0)
-        self.time_stop = kw.get("time_stop", 126)
-        self.dte_force = kw.get("dte_force", 180)
-        self.add_levels = kw.get("add_levels", [0.10, 0.20])
+        self.time_stop = kw.get("time_stop", 0)
+        self.dte_force = kw.get("dte_force", 90)
+        self.add_levels = kw.get("add_levels", [0.15, 0.25])
         self.max_qty = kw.get("max_qty", 3)
         self.entry_rsi = kw.get("entry_rsi", 35.0)
         self.delta = kw.get("delta", 0.65)
-        self.tenor = kw.get("tenor", 730)
+        self.tenor = kw.get("tenor", 365)
         self.waiting_ttl = kw.get("waiting_ttl", 3)
         self.half_tp = kw.get("half_tp", 0.5)
 
@@ -171,11 +171,20 @@ class TestExitRules(unittest.TestCase):
         out = evaluate_position(pos, _make_qqq(closed_rsi=70.0), self._cfg())
         self.assertEqual(out["breach"]["type"], "RSI_TP")
 
-    def test_2_time_stop_when_underwater(self):
+    def test_2_time_stop_disabled_by_default(self):
         from app.alerts.qqq_rules import evaluate_position
 
+        # 2026-10 复测: 默认配置禁用时间止损 (0) -> 超期且亏损不再触发 TIME_STOP
         pos = _Pos(entry_date=date.today() - timedelta(days=190), current_premium=90.0)
         out = evaluate_position(pos, _make_qqq(closed_rsi=40.0), self._cfg())
+        self.assertIsNone(out["breach"])
+
+    def test_2b_time_stop_when_enabled(self):
+        from app.alerts.qqq_rules import evaluate_position
+
+        # 显式开启 (126) 时: 超期且亏损 -> TIME_STOP
+        pos = _Pos(entry_date=date.today() - timedelta(days=190), current_premium=90.0)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=40.0), self._cfg(time_stop=126))
         self.assertEqual(out["breach"]["type"], "TIME_STOP")
 
     def test_3_time_stop_skipped_when_in_profit(self):
@@ -189,9 +198,17 @@ class TestExitRules(unittest.TestCase):
     def test_4_dte_force(self):
         from app.alerts.qqq_rules import evaluate_position
 
-        pos = _Pos(expiration_date=date.today() + timedelta(days=100), current_premium=300.0)
+        pos = _Pos(expiration_date=date.today() + timedelta(days=60), current_premium=300.0)
         out = evaluate_position(pos, _make_qqq(closed_rsi=40.0), self._cfg())
         self.assertEqual(out["breach"]["type"], "DTE_FORCE")
+
+    def test_4b_dte_not_triggered_above_90(self):
+        from app.alerts.qqq_rules import evaluate_position
+
+        # 60 天后到期才触发; 100 天 (旧 180 档内的值) 不触发
+        pos = _Pos(expiration_date=date.today() + timedelta(days=100), current_premium=300.0)
+        out = evaluate_position(pos, _make_qqq(closed_rsi=40.0), self._cfg())
+        self.assertIsNone(out["breach"])
 
     def test_5_no_breach_in_normal_holding(self):
         from app.alerts.qqq_rules import evaluate_position
@@ -266,10 +283,15 @@ class TestAddTrigger(unittest.TestCase):
         return evaluate_position(pos, _make_qqq(**qqq_kw), cfg)
 
     def test_1_first_level_hit(self):
-        # 跌 10% + RSI 仍 < 35 -> 提示加到 2 张
-        out = self._evaluate(_Pos(quantity=1), _FakeConfig(), closed_price=430.0, closed_rsi=30.0)
+        # 跌 15% (第一档 0.15) + RSI 仍 < 35 -> 提示加到 2 张
+        out = self._evaluate(_Pos(quantity=1), _FakeConfig(), closed_price=408.0, closed_rsi=30.0)
         self.assertIsNotNone(out["add_trigger"])
         self.assertEqual(out["add_trigger"]["next_count"], 2)
+
+    def test_1b_no_add_between_levels(self):
+        # 只跌 10%, 未到第一档 -15%
+        out = self._evaluate(_Pos(quantity=1), _FakeConfig(), closed_price=430.0, closed_rsi=30.0)
+        self.assertIsNone(out["add_trigger"])
 
     def test_2_no_add_when_rsi_recovered(self):
         # 跌幅够但 RSI 已修复 -> 不加
@@ -282,14 +304,14 @@ class TestAddTrigger(unittest.TestCase):
         self.assertIsNone(out["add_trigger"])
 
     def test_4_max_quantity_cap(self):
-        out = self._evaluate(_Pos(quantity=3), _FakeConfig(), closed_price=400.0, closed_rsi=30.0)
+        out = self._evaluate(_Pos(quantity=3), _FakeConfig(), closed_price=350.0, closed_rsi=30.0)
         self.assertIsNone(out["add_trigger"])
 
     def test_5_second_level_requires_first_taken(self):
-        # 已加过 1 次 (qty=2), 只认第二档 -20%
+        # 已加过 1 次 (qty=2), 只认第二档 -25%
         out = self._evaluate(_Pos(quantity=2, add_count=1), _FakeConfig(), closed_price=430.0, closed_rsi=30.0)
-        self.assertIsNone(out["add_trigger"])  # -10% 不再重复
-        out = self._evaluate(_Pos(quantity=2, add_count=1), _FakeConfig(), closed_price=383.0, closed_rsi=30.0)
+        self.assertIsNone(out["add_trigger"])  # 未到 -25% 不再重复
+        out = self._evaluate(_Pos(quantity=2, add_count=1), _FakeConfig(), closed_price=358.0, closed_rsi=30.0)
         self.assertIsNotNone(out["add_trigger"])
         self.assertEqual(out["add_trigger"]["next_count"], 3)
 
@@ -488,7 +510,7 @@ class LeapsEndToEndTest(unittest.TestCase):
         rec = OptionPosition(
             status="WAITING",
             signal_base_price=480.0, signal_rsi=30.0,
-            suggested_delta=0.65, suggested_tenor_days=730,
+            suggested_delta=0.65, suggested_tenor_days=365,
             created_at=datetime.utcnow() - timedelta(days=30),
         )
         self.db.add(rec)
@@ -654,7 +676,7 @@ class TestNotificationFormat(unittest.TestCase):
 
         class _P:
             suggested_delta = 0.65
-            suggested_tenor_days = 730
+            suggested_tenor_days = 365
 
         class _C(_FakeConfig):
             def get_add_levels(self):

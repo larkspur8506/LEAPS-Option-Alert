@@ -46,22 +46,22 @@
                         <p class="text-[11px] text-gray-400 mt-1">回测: 65 → 26年仅 2 笔亏损; 70 → 期望更高但尾部更深</p>
                     </div>
                     <div>
-                        <label class="block text-xs font-medium text-gray-500 mb-1">时间止损 (交易日)</label>
-                        <input name="time_stop_days" type="number" step="1" value="{{ time_stop_days }}" required
+                        <label class="block text-xs font-medium text-gray-500 mb-1">时间止损 (交易日, 0=关闭)</label>
+                        <input name="time_stop_days" type="number" step="1" min="0" value="{{ time_stop_days }}" required
                             class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
-                        <p class="text-[11px] text-gray-400 mt-1">持仓超期且未回本 → 提醒平仓 (回测定稿 126)</p>
+                        <p class="text-[11px] text-gray-400 mt-1">0=关闭 (2026-10 复测: 该规则制造了历史唯二亏损, 默认关闭)</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-500 mb-1">DTE 强制平仓 (自然日)</label>
                         <input name="dte_force_days" type="number" step="1" value="{{ dte_force_days }}" required
                             class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
-                        <p class="text-[11px] text-gray-400 mt-1">距到期不足该天数 → 强制清仓提醒 (沿用早期 180)</p>
+                        <p class="text-[11px] text-gray-400 mt-1">距到期不足该天数 → 强制清仓提醒 (1 年期合约配 90 天)</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-500 mb-1">加仓档位 (相对信号基准, 逗号分隔)</label>
                         <input name="add_levels" type="text" value="{{ add_levels }}" required
                             class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
-                        <p class="text-[11px] text-gray-400 mt-1">如 0.10,0.20 = 跌 10% / 20% 各提醒加 1 张</p>
+                        <p class="text-[11px] text-gray-400 mt-1">如 0.15,0.25 = 跌 15% / 25% 各提醒加 1 张 (2026-10 复测定稿)</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-500 mb-1">最大张数</label>
@@ -79,7 +79,7 @@
                         <label class="block text-xs font-medium text-gray-500 mb-1">建议期限 (自然日)</label>
                         <input name="target_tenor_days" type="number" step="1" value="{{ target_tenor_days }}" required
                             class="block w-full text-sm bg-white border border-gray-200 rounded-lg py-2 px-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
-                        <p class="text-[11px] text-gray-400 mt-1">约 2 年 = 730 天; theta 慢, 扛得住阴跌</p>
+                        <p class="text-[11px] text-gray-400 mt-1">约 1 年 = 365 天 (2026-10 复测: 持仓中位仅 35 天, 更长期限只是多付时间价值; 1y 需配 DTE 90)</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-500 mb-1">分批止盈阈值 (总盈利比例, 0=关闭)</label>
@@ -102,7 +102,7 @@
                     监控 <strong>QQQ</strong> 日线: 当 <strong>RSI14 跌破 35</strong>,
                     且 <strong>连续 3 个交易日收盘价大于 SMA200</strong>,
                     且 <strong>当前价格高于一年前价格</strong> 时, 系统创建 WAITING 建议合约
-                    (0.65Δ / 约 2 年 QQQ Call)。用户在券商手动买入后录入实际参数确认建仓。
+                    (0.65Δ / 约 1 年 QQQ Call)。用户在券商手动买入后录入实际参数确认建仓。
                 </p>
                 <p class="text-xs text-blue-700 mt-2">
                     判定基准为 <strong>最后一根已收盘日 K</strong> (收盘确认制): 盘中最后一根未收盘 bar 的 RSI 波动不会触发信号。
