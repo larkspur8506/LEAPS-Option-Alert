@@ -168,6 +168,7 @@ def _half_tp_alerted_in_db(db: Session, position_id: int) -> bool:
             .filter(
                 AlertLog.alert_type == "LEAPS_HALF_TP",
                 AlertLog.position_id == position_id,
+                AlertLog.sent_successfully.is_(True),   # 失败记录不算已提醒 (可重试)
             )
             .first()
         )
@@ -187,6 +188,7 @@ def _add_already_alerted(db: Session, position_id: int, next_count: int) -> bool
             .filter(
                 AlertLog.alert_type == "LEAPS_ADD_LOT",
                 AlertLog.position_id == position_id,
+                AlertLog.sent_successfully.is_(True),   # 失败记录不算已提醒 (可重试)
             )
             .order_by(AlertLog.id.desc())
             .limit(20)
@@ -247,10 +249,18 @@ def process_leaps_position(
         # 分批止盈提醒 (HALF_TP): 仅提醒, 不改仓位状态; 优先级在加仓提醒之前
         half_tp_trigger = evaluation.get("half_tp_trigger")
         if half_tp_trigger and not _half_tp_alerted_in_db(db, holding.id) \
-                and dedup.should_alert(f"LEAPS_HALF_TP_pos_{holding.id}"):
+                and not dedup.was_alerted(f"LEAPS_HALF_TP_pos_{holding.id}"):
+            if notifier is None:
+                # 未配置推送通道: 不写日志也不重试, 避免每 5 分钟刷一条失败记录
+                return {"status": "OK", "action": "NOTIFY_SKIPPED_NO_WEBHOOK", "position_id": holding.id}
             message = format_leaps_half_tp(holding, half_tp_trigger, qqq_data)
-            _notify_with_log(db, notifier, message, "LEAPS_HALF_TP", "LEAPS 分批止盈提醒",
-                             position_id=holding.id)
+            ok = _notify_with_log(db, notifier, message, "LEAPS_HALF_TP", "LEAPS 分批止盈提醒",
+                                  position_id=holding.id)
+            if not ok:
+                # 发送失败: 不置去重、不置 half_tp_alerted -> 下一轮 (5 分钟) 自动重试
+                logger.warning("[LEAPS Monitor] half-tp alert delivery failed, will retry next cycle")
+                return {"status": "OK", "action": "HALF_TP_SEND_FAILED", "position_id": holding.id}
+            dedup.mark_alerted(f"LEAPS_HALF_TP_pos_{holding.id}")
             try:
                 holding.half_tp_alerted = True
                 db.commit()
@@ -263,10 +273,17 @@ def process_leaps_position(
         if add_trigger:
             next_count = int(add_trigger.get("next_count") or 0)
             if not _add_already_alerted(db, holding.id, next_count) and \
-                    dedup.should_alert(_add_dedup_key(holding.id, next_count)):
+                    not dedup.was_alerted(_add_dedup_key(holding.id, next_count)):
+                if notifier is None:
+                    return {"status": "OK", "action": "NOTIFY_SKIPPED_NO_WEBHOOK", "position_id": holding.id}
                 message = format_leaps_add_lot(holding, add_trigger, qqq_data)
-                _notify_with_log(db, notifier, message, "LEAPS_ADD_LOT", "LEAPS 加仓提醒",
-                                 position_id=holding.id)
+                ok = _notify_with_log(db, notifier, message, "LEAPS_ADD_LOT", "LEAPS 加仓提醒",
+                                      position_id=holding.id)
+                if not ok:
+                    # 发送失败 -> 下一轮重试 (去重键只在成功后置位)
+                    logger.warning("[LEAPS Monitor] add-lot alert delivery failed, will retry next cycle")
+                    return {"status": "OK", "action": "ADD_SEND_FAILED", "position_id": holding.id}
+                dedup.mark_alerted(_add_dedup_key(holding.id, next_count))
                 return {"status": "OK", "action": "ADD_ALERTED", "position_id": holding.id}
 
         return {"status": "OK", "action": "HOLDING_MONITORED", "position_id": holding.id}

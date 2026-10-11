@@ -361,7 +361,7 @@ class TestDailyReportDedupWindow(BaseTest):
         fixed_now_et = et_tz.localize(datetime(2026, 9, 30, 16, 30, 0))
         with patch("app.scheduler.jobs.is_trading_day", return_value=True), \
              patch("app.scheduler.jobs.get_current_time_et", return_value=fixed_now_et), \
-             patch("app.scheduler.jobs.get_wechat_notifier", return_value=notifier):
+             patch("app.scheduler.jobs.get_notifier", return_value=notifier):
             send_daily_report_job(self.mock_fetcher, db=self.db, config=self.config)
         return notifier
 

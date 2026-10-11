@@ -7,6 +7,7 @@
 - formatter 为模块级纯函数; WeChatNotifier 方法保留为向后兼容的薄封装。
 """
 import re
+import time
 import requests
 from typing import Dict, Optional, Any
 from datetime import datetime
@@ -20,8 +21,40 @@ DEFAULT_ENTRY_RSI = 35.0
 DEFAULT_TP_RSI = 65.0
 DEFAULT_TIME_STOP_DAYS = 0
 DEFAULT_DTE_FORCE_DAYS = 90
-DEFAULT_TARGET_DELTA = 0.65
+DEFAULT_TARGET_DELTA = 0.70
 DEFAULT_TARGET_TENOR_DAYS = 365
+
+
+def split_message_chunks(message: str, max_bytes: int = 1900) -> list:
+    """把长消息按行切成 ≤max_bytes 的多段 (企业微信 text 上限 2048 字节)。
+
+    2026-10-11 评审 P2-8: 原先不检查长度, 一旦超限发送会失败 (且失败被去重吞掉)。
+    优先在换行处切分, 单行本身超长时硬切 (按字节边界安全解码)。
+    """
+    raw = message or ""
+    if len(raw.encode("utf-8")) <= max_bytes:
+        return [raw]
+
+    chunks = []
+    cur = []
+    cur_bytes = 0
+    for line in raw.split("\n"):
+        while len(line.encode("utf-8")) > max_bytes:
+            head = line.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
+            if cur:
+                chunks.append("\n".join(cur))
+                cur, cur_bytes = [], 0
+            chunks.append(head)
+            line = line[len(head):]
+        line_bytes = len(line.encode("utf-8")) + 1
+        if cur and cur_bytes + line_bytes > max_bytes:
+            chunks.append("\n".join(cur))
+            cur, cur_bytes = [], 0
+        cur.append(line)
+        cur_bytes += line_bytes
+    if cur:
+        chunks.append("\n".join(cur))
+    return chunks or [raw]
 
 
 def _redact_secrets(text: str) -> str:
@@ -597,43 +630,60 @@ class WeChatNotifier:
     def format_leaps_report(self, data: Dict) -> str:
         return format_leaps_daily_report(data)
 
+    # 发送重试 (2026-10-11 评审 P1-3): 单次失败不再等于提醒永久丢失。
+    # 监控每 5 分钟一轮, 3 次尝试 + 退避足以吃掉绝大多数网络抖动。
+    SEND_ATTEMPTS = 3
+    SEND_BACKOFF_SECONDS = (1.0, 3.0)
+    MAX_CHUNK_BYTES = 1900   # 企业微信 text 上限 2048 字节, 留余量
+
     def _send_message(self, message: str) -> bool:
         if not self.webhook_url:
             print(f"[WARN] WeChat webhook URL not configured, skipping alert: {message[:100]}")
             return False
 
-        try:
-            payload = {
-                "msgtype": "text",
-                "text": {
-                    "content": message,
-                    "mentioned_list": []
-                }
-            }
+        chunks = split_message_chunks(message, self.MAX_CHUNK_BYTES)
+        if len(chunks) > 1:
+            print(f"[INFO] WeChat message is {len(message.encode('utf-8'))} bytes, "
+                  f"sending in {len(chunks)} chunks")
 
-            response = requests.post(
-                self.webhook_url,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=10
-            )
-
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("errcode") == 0:
-                    print(f"[INFO] WeChat alert sent successfully")
-                    return True
-                else:
-                    print(f"[ERROR] WeChat API error: {result}")
-                    return False
-            else:
-                print(f"[ERROR] WeChat HTTP error: {response.status_code} - {response.text}")
+        for chunk in chunks:
+            if not self._post_chunk(chunk):
                 return False
+        print("[INFO] WeChat alert sent successfully")
+        return True
 
-        except Exception as e:
-            # 异常消息可能包含完整 webhook URL (含 key=SECRET), 脱敏后再输出
-            print(f"[ERROR] Failed to send WeChat message: {_redact_secrets(str(e))}")
-            return False
+    def _post_chunk(self, chunk: str) -> bool:
+        """单段发送: 最多 SEND_ATTEMPTS 次尝试, 全部失败返回 False。"""
+        payload = {"msgtype": "text", "text": {"content": chunk, "mentioned_list": []}}
+        last_err = "unknown"
+        for attempt in range(1, self.SEND_ATTEMPTS + 1):
+            try:
+                response = requests.post(
+                    self.webhook_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10,
+                )
+                if response.status_code == 200:
+                    try:
+                        result = response.json()
+                    except Exception:
+                        result = {}
+                    if result.get("errcode") == 0:
+                        return True
+                    last_err = f"API errcode={result.get('errcode')} {result.get('errmsg', '')}"
+                else:
+                    last_err = f"HTTP {response.status_code}"
+            except Exception as e:
+                # 异常消息可能包含完整 webhook URL (含 key=SECRET), 脱敏后再输出
+                last_err = _redact_secrets(str(e))
+
+            if attempt < self.SEND_ATTEMPTS:
+                backoff = self.SEND_BACKOFF_SECONDS[min(attempt - 1, len(self.SEND_BACKOFF_SECONDS) - 1)]
+                time.sleep(backoff)
+
+        print(f"[ERROR] WeChat send failed after {self.SEND_ATTEMPTS} attempts: {last_err}")
+        return False
 
 
 def get_wechat_notifier(webhook_url: str) -> WeChatNotifier:

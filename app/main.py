@@ -1,6 +1,7 @@
 import hmac
 import logging
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -35,7 +36,51 @@ from app.services import leaps_service
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="QQQ LEAPS Alert System")
+def _startup_event() -> None:
+    """启动钩子: 初始化 DB / 配置 / 行情抓取器 / 调度器。"""
+    global data_fetcher, config
+
+    init_db()
+
+    db = SessionLocal()
+
+    try:
+        config_db = db.query(Configuration).first()
+        if not config_db:
+            config_db = Configuration(
+                admin_password_hash="",
+                wechat_webhook_url=""
+            )
+            db.add(config_db)
+            db.commit()
+
+        db.refresh(config_db)
+
+        config = get_config(_build_config_dict(config_db))
+
+        data_fetcher = DataFetcher()
+
+        start_scheduler(data_fetcher, db, config)
+
+    finally:
+        db.close()
+
+
+def _shutdown_event() -> None:
+    stop_scheduler()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """FastAPI 生命周期 (2026-10-11 评审 P3: 取代已废弃的 @app.on_event)。"""
+    _startup_event()
+    try:
+        yield
+    finally:
+        _shutdown_event()
+
+
+app = FastAPI(title="QQQ LEAPS Alert System", lifespan=lifespan)
 
 # 签名会话 Cookie (替代历史静态 admin_logged_in=true, 后者可被任意伪造)
 app.add_middleware(
@@ -55,6 +100,16 @@ def _configured_setup_token() -> str:
 
 
 def _is_loopback(request: Request) -> bool:
+    """是否为本机直连 (非经反向代理)。
+
+    2026-10-11 评审 P3: 反代 (openresty) 从 127.0.0.1 连入, 单看 client.host
+    会把公网请求也判成回环 -> "未配置 SETUP_TOKEN 时仅本机可初始化" 的兜底
+    等于失效。因此带任何代理转发头时一律按非回环处理。
+    """
+    headers = getattr(request, "headers", {}) or {}
+    for header in ("x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host"):
+        if headers.get(header):
+            return False
     host = getattr(getattr(request, "client", None), "host", "") or ""
     return host in ("127.0.0.1", "::1", "localhost")
 
@@ -92,42 +147,12 @@ def _build_config_dict(config_db: Configuration) -> dict:
         "leaps_target_delta": getattr(config_db, 'leaps_target_delta', None),
         "leaps_target_tenor_days": getattr(config_db, 'leaps_target_tenor_days', None),
         "leaps_half_tp_pnl": getattr(config_db, 'leaps_half_tp_pnl', None),
+        "leaps_capital_cap": getattr(config_db, 'leaps_capital_cap', None),
+        "leaps_iv_assumption": getattr(config_db, 'leaps_iv_assumption', None),
+        "leaps_capital_mode": getattr(config_db, 'leaps_capital_mode', None),
+        "leaps_total_assets": getattr(config_db, 'leaps_total_assets', None),
+        "leaps_capital_pct": getattr(config_db, 'leaps_capital_pct', None),
     }
-
-
-@app.on_event("startup")
-async def startup_event():
-    global data_fetcher, config
-
-    init_db()
-
-    db = SessionLocal()
-
-    try:
-        config_db = db.query(Configuration).first()
-        if not config_db:
-            config_db = Configuration(
-                admin_password_hash="",
-                wechat_webhook_url=""
-            )
-            db.add(config_db)
-            db.commit()
-
-        db.refresh(config_db)
-
-        config = get_config(_build_config_dict(config_db))
-
-        data_fetcher = DataFetcher()
-
-        start_scheduler(data_fetcher, db, config)
-
-    finally:
-        db.close()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    stop_scheduler()
 
 
 @app.get("/")
@@ -143,7 +168,11 @@ async def health():
 @app.get("/health/detailed")
 async def health_detailed(db: Session = Depends(get_db)):
     """
-    Detailed health check - checks all critical components
+    详细健康检查 (供外部死手看守轮询; **未鉴权**, 因此只暴露粗粒度状态)。
+
+    2026-10-11 评审 P3: 原先返回仓位条数, 且会主动抓一次行情 —— 任何外部请求
+    都能放大上游压力并窥探内部状态。现在只读本地状态, 行情只看已有缓存,
+    绝不主动发起网络请求; 也不暴露任何仓位/配置细节。
     """
     results = {
         "status": "healthy",
@@ -161,28 +190,20 @@ async def health_detailed(db: Session = Depends(get_db)):
 
     # Check scheduler
     from app.scheduler.jobs import scheduler
-    results["components"]["scheduler"] = {
-        "status": "running" if scheduler.running else "stopped"
-    }
+    scheduler_running = bool(getattr(scheduler, "running", False))
+    results["components"]["scheduler"] = {"status": "running" if scheduler_running else "stopped"}
+    if not scheduler_running:
+        results["status"] = "degraded"
 
-    # Check QQQ market data source
-    if data_fetcher:
-        try:
-            qqq_data = data_fetcher.get_qqq_data()
-            results["components"]["qqq_data"] = {
-                "status": "ok" if qqq_data.get("last_price") else "no_data"
-            }
-        except Exception as e:
-            results["components"]["qqq_data"] = {"status": "error", "message": str(e)}
-            results["status"] = "degraded"
-
-    # Check option positions
-    try:
-        from app.database.models import OptionPosition
-        count = db.query(OptionPosition).count()
-        results["components"]["option_positions"] = {"status": "ok", "count": count}
-    except Exception as e:
-        results["components"]["option_positions"] = {"status": "error", "message": str(e)}
+    # QQQ 数据: 只看缓存新鲜度, 不触发抓取
+    cached = getattr(data_fetcher, "_qqq_cache", None) if data_fetcher else None
+    if isinstance(cached, dict) and cached.get("last_price"):
+        results["components"]["qqq_data"] = {
+            "status": "cached",
+            "data_timestamp": cached.get("data_timestamp"),
+        }
+    else:
+        results["components"]["qqq_data"] = {"status": "no_cache"}
 
     return results
 
@@ -452,7 +473,7 @@ async def update_strategy(
     iv_assumption: str = Form("0.22"),
     target_delta: str = Form("0.70"),
     target_tenor_days: str = Form("365"),
-    half_tp_pnl: str = Form("0.5"),
+    half_tp_pnl: str = Form("0"),
     db: Session = Depends(get_db),
 ):
     """保存 LEAPS 策略参数 (后台可调; 数值非法时后端静默回退当前值)。"""

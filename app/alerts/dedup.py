@@ -52,6 +52,16 @@ class AlertDeduplicator:
         self.weekly_rules[week_key].add(rule_key)
         return True
 
+    def was_alerted(self, rule_name: str, position_id: int = None) -> bool:
+        """只查询不置位 (配合 mark_alerted 实现"发送成功才计去重")。"""
+        today = self.get_today_key()
+        return self._get_rule_key(rule_name, position_id) in self.daily_rules.get(today, set())
+
+    def mark_alerted(self, rule_name: str, position_id: int = None) -> None:
+        """只置位不查询 (发送成功后调用)。"""
+        today = self.get_today_key()
+        self.daily_rules.setdefault(today, set()).add(self._get_rule_key(rule_name, position_id))
+
     def reset_daily(self):
         today = self.get_today_key()
         old_days = [day for day in self.daily_rules.keys() if day != today]
@@ -78,6 +88,18 @@ _dedup_lock = threading.RLock()
 def should_alert(rule_name: str, position_id: int = None) -> bool:
     with _dedup_lock:
         return _deduplicator.should_alert(rule_name, position_id)
+
+def was_alerted(rule_name: str, position_id: int = None) -> bool:
+    """只查询: 今天是否已成功提醒过 (不置位)。"""
+    with _dedup_lock:
+        return _deduplicator.was_alerted(rule_name, position_id)
+
+
+def mark_alerted(rule_name: str, position_id: int = None) -> None:
+    """只置位: 标记今天已成功提醒 (发送成功后调用)。"""
+    with _dedup_lock:
+        _deduplicator.mark_alerted(rule_name, position_id)
+
 
 def should_alert_weekly(rule_name: str, position_id: int = None) -> bool:
     with _dedup_lock:

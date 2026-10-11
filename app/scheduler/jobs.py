@@ -8,8 +8,8 @@ from app.market.data_fetcher import DataFetcher
 from app.alerts import dedup
 from app.alerts.alert_log import log_alert, alerted_within, utcnow_naive
 from app.alerts.leaps_monitor import process_leaps_position
+from app.notification.dispatch import get_notifier
 from app.notification.wechat import (
-    get_wechat_notifier,
     format_leaps_data_stale,
     format_leaps_data_unavailable,
 )
@@ -28,26 +28,62 @@ scheduler = BackgroundScheduler(
 )
 
 
-def cleanup_old_data(db, config):
-    logger.info("Starting data cleanup...")
+def _fresh_config(session, fallback=None):
+    """每轮任务从 DB 重新加载策略参数。
 
-    alert_log_retention = config.get_alert_log_retention_days()
+    背景 (2026-10-11 评审 P1-2): 调度器持有的 Config 是**启动时**构造的快照,
+    /admin/rules 保存后 refresh_global_config() 只重绑模块全局变量, 定时任务里的
+    那份引用不变 -> 参数改动必须重启容器才生效。改为每轮重载后, "改完下一轮生效"
+    才成立。任何异常退回启动快照, 不影响任务执行。
+    """
+    try:
+        from app.config import load_config_from_db
 
-    from app.database.models import AlertLog
-    from datetime import timedelta
+        cfg = load_config_from_db(session)
+        return cfg if cfg is not None else fallback
+    except Exception as e:
+        logger.warning(f"[CONFIG] reload from DB failed, using startup snapshot: {e}")
+        return fallback
 
-    # 时间基准统一为 UTC naive (AlertLog.triggered_at 的存储口径)
-    cutoff_date = utcnow_naive() - timedelta(days=alert_log_retention)
 
-    deleted_alerts = db.query(AlertLog).filter(
-        AlertLog.triggered_at < cutoff_date
-    ).delete()
+def cleanup_old_data(db=None, config=None):
+    """每日清理旧告警日志。
 
-    db.commit()
+    2026-10-11 评审 P2-4: 原先由 start_scheduler 传入启动时创建、随后在
+    startup_event 的 finally 里被 close() 的 Session (能用但纯属侥幸),
+    改为任务内自建自关, 与其他两个 job 口径一致。
+    """
+    close_session = False
+    session = db
+    if session is None:
+        from app.database.init_db import SessionLocal
+        session = SessionLocal()
+        close_session = True
 
-    dedup.reset_daily_dedup()
+    try:
+        logger.info("Starting data cleanup...")
 
-    logger.info(f"Deleted {deleted_alerts} old alert logs")
+        config = _fresh_config(session, config)
+        alert_log_retention = config.get_alert_log_retention_days()
+
+        from app.database.models import AlertLog
+        from datetime import timedelta
+
+        # 时间基准统一为 UTC naive (AlertLog.triggered_at 的存储口径)
+        cutoff_date = utcnow_naive() - timedelta(days=alert_log_retention)
+
+        deleted_alerts = session.query(AlertLog).filter(
+            AlertLog.triggered_at < cutoff_date
+        ).delete()
+
+        session.commit()
+
+        dedup.reset_daily_dedup()
+
+        logger.info(f"Deleted {deleted_alerts} old alert logs")
+    finally:
+        if close_session:
+            session.close()
 
 
 def _is_qqq_data_fresh(qqq_data) -> bool:
@@ -98,8 +134,8 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
     strategy = {
         "entry_rsi": 35.0, "tp_rsi": 65.0,
         "time_stop_days": 0, "dte_force_days": 90,
-        "target_delta": 0.65, "target_tenor_days": 365,
-        "half_tp_pnl": 0.5,
+        "target_delta": 0.70, "target_tenor_days": 365,
+        "half_tp_pnl": 0.0,
     }
     if config:
         try:
@@ -110,7 +146,7 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
                 "dte_force_days": config.get_dte_force_days(),
                 "target_delta": config.get_target_delta(),
                 "target_tenor_days": config.get_target_tenor_days(),
-                "half_tp_pnl": config.get_half_tp_pnl() if hasattr(config, "get_half_tp_pnl") else 0.5,
+                "half_tp_pnl": config.get_half_tp_pnl() if hasattr(config, "get_half_tp_pnl") else 0.0,
             }
         except Exception as e:
             logger.warning(f"DAILY_REPORT strategy config fallback to defaults: {e}")
@@ -122,10 +158,9 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
         "breadth": breadth,
     }
 
-    webhook = ""
-    if config and hasattr(config, "get_wechat_webhook_url"):
-        webhook = config.get_wechat_webhook_url()
-    notifier = get_wechat_notifier(webhook)
+    notifier = get_notifier(config)
+    if notifier is None:
+        logger.warning("DAILY_REPORT no notification channel configured (wecom/telegram)")
 
     # 去重 (两道): 内存态 (同进程) + 落库态 (跨重启, 修复"16:30 后重启当天重发日报")
     # 落库闸门以"美东自然日"为界: 若用滚动 24 小时窗口, 昨天的日报(约 24 小时前)
@@ -133,9 +168,9 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
     day_start_et = get_current_time_et().replace(hour=0, minute=0, second=0, microsecond=0)
     day_start_utc = day_start_et.astimezone(timezone.utc).replace(tzinfo=None)
     already_sent_today = alerted_within(
-        db, "LEAPS_DAILY_REPORT", since_utc=day_start_utc
+        db, "LEAPS_DAILY_REPORT", since_utc=day_start_utc, success_only=True
     )
-    if not already_sent_today and dedup.should_alert("DAILY_REPORT"):
+    if not already_sent_today and not dedup.was_alerted("DAILY_REPORT"):
         # 先格式化完整日报文本 (与企业微信实际发送内容相同的唯一来源)
         formatted_message = notifier.format_leaps_report(report_data)
         success = notifier.send_leaps_report(report_data)
@@ -147,6 +182,9 @@ def _send_leaps_daily_report(data_fetcher: DataFetcher, db, config, report_date:
             formatted_message,
             success,
         )
+        if success:
+            # 只在真正送达后置去重 (失败时保留重试机会)
+            dedup.mark_alerted("DAILY_REPORT")
         logger.info(f"DAILY_REPORT mode=leaps date={report_date} sent={success}")
     else:
         logger.info(
@@ -173,6 +211,9 @@ def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):
         from app.database.init_db import SessionLocal
         session = SessionLocal()
         close_session = True
+
+    # 每轮重载策略参数 (改完 /admin/rules 下一轮生效, 无需重启)
+    config = _fresh_config(session, config)
 
     mode = "leaps"
     try:
@@ -204,17 +245,14 @@ def send_daily_report_job(data_fetcher: DataFetcher, db=None, config=None):
 def _send_data_unavailable_alert(db, config):
     """⚠️ 数据不可用事件: fail-closed 提醒 (按日去重, 不阻塞监控主流程)"""
     try:
-        if not (config and hasattr(config, "get_wechat_webhook_url")):
-            return
-        webhook_url = config.get_wechat_webhook_url()
-        if not webhook_url:
+        notifier = get_notifier(config)
+        if notifier is None:
             return
 
         # 按日去重: 同一天只提醒一次, 防止每 5 分钟重复推送
         if not dedup.should_alert("LEAPS_DATA_UNAVAILABLE"):
             return
 
-        notifier = get_wechat_notifier(webhook_url)
         message = format_leaps_data_unavailable()
         try:
             success = notifier.send_message(message)
@@ -263,6 +301,9 @@ def check_leaps_position(data_fetcher: DataFetcher, db=None, config=None, check_
         session = SessionLocal()
         close_session = True
 
+    # 每轮重载策略参数 (改完 /admin/rules 下一轮生效, 无需重启)
+    config = _fresh_config(session, config)
+
     try:
         # 1. 获取 QQQ 市场数据
         #    数据异常时 fail-closed: 跳过监控, 不触发任何信号, 仅发送数据异常提醒
@@ -278,12 +319,8 @@ def check_leaps_position(data_fetcher: DataFetcher, db=None, config=None, check_
             _send_data_unavailable_alert(session, config)
             return {"status": "SKIPPED", "reason": "NO_VALID_DATA"}
 
-        # 2. 获取 notifier
-        notifier = None
-        if config and hasattr(config, "get_wechat_webhook_url"):
-            webhook_url = config.get_wechat_webhook_url()
-            if webhook_url:
-                notifier = get_wechat_notifier(webhook_url)
+        # 2. 获取 notifier (多通道: 企业微信 + Telegram, 任一可用即可)
+        notifier = get_notifier(config)
 
         # 3. 驱动 LEAPS 监控状态机
         result = process_leaps_position(session, qqq_data, notifier=notifier, config=config)
@@ -340,7 +377,7 @@ def start_scheduler(data_fetcher: DataFetcher, db, config):
         "cron",
         hour=2,
         minute=0,
-        args=[db, config],
+        args=[],   # 任务内自建 session (不再复用启动时已关闭的那个)
         id="cleanup_old_data",
         name="Cleanup Old Data",
         replace_existing=True

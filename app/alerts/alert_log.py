@@ -81,7 +81,8 @@ def alerted_within(db, alert_type: str, within_seconds: Optional[int] = None,
                    cycle_id: Optional[int] = None,
                    position_id: Optional[int] = None,
                    now_utc: Optional[datetime] = None,
-                   since_utc: Optional[datetime] = None) -> bool:
+                   since_utc: Optional[datetime] = None,
+                   success_only: bool = False) -> bool:
     """
     落库级去重查询: 指定时间窗内是否已存在同类型(且同 cycle/position)的告警记录。
 
@@ -108,6 +109,10 @@ def alerted_within(db, alert_type: str, within_seconds: Optional[int] = None,
         query = query.filter(AlertLog.cycle_id == cycle_id)
     if position_id is not None:
         query = query.filter(AlertLog.position_id == position_id)
+    if success_only:
+        # 2026-10-11 评审 P1-3: 发送失败的记录不算"已提醒", 否则一次网络抖动
+        # 就会把这条提醒永久吞掉 (退出类提醒尤其致命)。
+        query = query.filter(AlertLog.sent_successfully.is_(True))
     try:
         return query.first() is not None
     except Exception as e:

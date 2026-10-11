@@ -30,11 +30,7 @@ from app.services.leaps_service import (
     OptionPositionStateError,
     OptionParameterError,
 )
-from app.notification.wechat import (
-    WeChatNotifier,
-    format_leaps_exit,
-    get_wechat_notifier,
-)
+from app.notification.wechat import format_leaps_exit
 from app.alerts.alert_log import log_alert
 
 import logging
@@ -58,17 +54,16 @@ def require_admin(request: Request) -> None:
 router = APIRouter(prefix="/api/leaps", tags=["leaps"], dependencies=[Depends(require_admin)])
 
 
-def _get_wechat_notifier() -> Optional[WeChatNotifier]:
-    """惰性获取运行时配置中的 webhook (避免与 app.main 循环导入); 未配置返回 None"""
+def _get_wechat_notifier():
+    """惰性获取多通道 notifier (避免与 app.main 循环导入); 未配置任何通道返回 None。"""
     try:
         from app.config import load_config_from_db
         from app.database.init_db import SessionLocal
+        from app.notification.dispatch import get_notifier
 
         db = SessionLocal()
         try:
-            config = load_config_from_db(db)
-            webhook = config.get_wechat_webhook_url()
-            return get_wechat_notifier(webhook) if webhook else None
+            return get_notifier(load_config_from_db(db))
         finally:
             db.close()
     except Exception as e:
@@ -146,9 +141,20 @@ def _raise_http(exc: Exception):
 
 @router.get("/status")
 def get_status(request: Request, db: Session = Depends(get_db)):
+    """dashboard 每 30s 轮询本接口。
+
+    2026-10-11 评审 P2-1: 原先每次调用都 `DataFetcher()` 新建实例 -> 应用层缓存
+    (按交易日/60s) 完全失效, 每次都重新抓一次行情。改为复用启动时的单例。
+    """
     from app.market.data_fetcher import DataFetcher
+    fetcher = None
     try:
-        qqq_data = DataFetcher().get_qqq_data()
+        from app.main import data_fetcher as shared_fetcher
+        fetcher = shared_fetcher
+    except Exception:
+        fetcher = None
+    try:
+        qqq_data = (fetcher or DataFetcher()).get_qqq_data()
     except Exception:
         qqq_data = None
     if isinstance(qqq_data, dict):

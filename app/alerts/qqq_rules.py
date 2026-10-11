@@ -17,6 +17,8 @@
       最多加到 max_quantity 张。回测: 加仓将 p10 从 -21% 收窄到 +24%。
 """
 import logging
+import threading
+import time
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -58,10 +60,17 @@ def check_entry_signal(qqq_data: Dict[str, Any], rsi_threshold: float = 35.0) ->
     if p1y is None or not (price > p1y):
         return None
 
+    # closed_bar_date 是 pandas 时间戳, str() 会带 " 00:00:00-04:00" -> 只留日期
+    raw_bar = qqq_data.get("closed_bar_date")
+    if hasattr(raw_bar, "strftime"):
+        bar_date = raw_bar.strftime("%Y-%m-%d")
+    else:
+        bar_date = str(raw_bar or "")[:10]
+
     return {
         "signal_base_price": float(price),
         "signal_rsi": float(rsi),
-        "signal_bar_date": str(qqq_data.get("closed_bar_date") or ""),
+        "signal_bar_date": bar_date,
         "closed_price": qqq_data.get("last_price"),
     }
 
@@ -239,14 +248,61 @@ def _check_add_trigger(position: Any, qqq_data: Dict[str, Any], config: Any) -> 
 # 期权报价跟踪 (yfinance 期权链, 尽力而为; 失败不影响退出判定)
 # ---------------------------------------------------------------------------
 
-def fetch_option_premium(strike: float, expiration: date, today: Optional[date] = None) -> Optional[float]:
-    """
-    从 yfinance 期权链取接近 0.65Δ 的 call 中间价。
+# 期权链报价缓存 (2026-10-11 评审 P2-3): 入场建议与持仓刷新复用同一次链请求,
+# 避免在监控线程里反复下载整条链 (冷取实测 ~4s, 会推迟提醒发出)。
+_PREMIUM_CACHE: Dict[Any, Any] = {}
+_PREMIUM_CACHE_LOCK = threading.Lock()
+PREMIUM_CACHE_TTL_SECONDS = 600
+# 中间价可信度门槛 (评审 P2-2): 价差 / 中间价 超过该比例则认为盘口太虚, 退回成交价
+PREMIUM_MAX_SPREAD_RATIO = 0.25
 
-    约定: strike 为 None/0 时自动选行权价 (≈spot 下方的 0.65Δ 近似: 略 ITM)。
-    链上无该到期日或链为空时返回 None。报价仅用于展示/告警富化,
-    退出判定不依赖 (TIME_STOP 的"未回本"在无报价时保守按"未回本"处理)。
+
+def _premium_cache_get(key):
+    now = time.time()
+    with _PREMIUM_CACHE_LOCK:
+        item = _PREMIUM_CACHE.get(key)
+        if not item:
+            return None
+        ts, value = item
+        if now - ts > PREMIUM_CACHE_TTL_SECONDS:
+            _PREMIUM_CACHE.pop(key, None)
+            return None
+        return value
+
+
+def _premium_cache_put(key, value) -> None:
+    with _PREMIUM_CACHE_LOCK:
+        _PREMIUM_CACHE[key] = (time.time(), value)
+
+
+def clear_premium_cache() -> None:
+    """测试/排障用: 清空期权链缓存。"""
+    with _PREMIUM_CACHE_LOCK:
+        _PREMIUM_CACHE.clear()
+
+
+def fetch_option_premium(strike: float, expiration: date, today: Optional[date] = None,
+                         use_cache: bool = True) -> Optional[float]:
     """
+    从 yfinance 期权链取指定行权价 call 的报价 (每股价)。
+
+    取价优先级 (2026-10-11 评审 P2-2): 买卖中间价 (要求 bid>0 且价差 ≤ 25%) >
+    最后成交价 lastPrice > regularMarketPrice。LEAPS 流动性差, 只看 lastPrice
+    可能取到几小时前的成交价, 会把建议张数算偏。
+    约定: strike 为 None/0 时自动按 ≈spot*0.94 选行权价 (0.70Δ 一年期近似, 见 option_math)。
+    链上无该到期日或链为空时返回 None; 结果带 10 分钟进程内缓存 (P2-3)。
+    报价仅用于展示/告警富化与建议张数, 退出判定不依赖。
+    """
+    cache_key = None
+    if use_cache:
+        try:
+            cache_key = (round(float(strike or 0), 2), expiration.strftime("%Y-%m-%d"))
+            cached = _premium_cache_get(cache_key)
+            if cached is not None:
+                return cached
+        except Exception:
+            cache_key = None
+
     try:
         import yfinance as yf
 
@@ -265,18 +321,43 @@ def fetch_option_premium(strike: float, expiration: date, today: Optional[date] 
         if not spot:
             return None
 
-        # 目标行权价: 无指定时取 spot*0.94 附近最接近的 (0.65Δ 粗近似)
+        # 目标行权价: 无指定时取 spot*0.94 附近最接近的 (0.70Δ/1 年 近似)
         target = float(strike) if strike and strike > 0 else spot * 0.94
         calls = calls.assign(_dist=(calls["strike"] - target).abs())
         row = calls.sort_values("_dist").iloc[0]
-        for col in ("lastPrice", "regularMarketPrice"):
-            v = row.get(col)
-            if v is not None and float(v) > 0:
-                return float(v)
-        bid, ask = row.get("bid"), row.get("ask")
-        if bid and ask and float(bid) > 0 and float(ask) > 0:
-            return (float(bid) + float(ask)) / 2.0
-        return None
+
+        price = None
+        # 1) 买卖中间价 (盘口不能太虚)
+        try:
+            bid, ask = float(row.get("bid") or 0), float(row.get("ask") or 0)
+            if bid > 0 and ask > 0 and ask >= bid:
+                mid = (bid + ask) / 2.0
+                if mid > 0 and (ask - bid) / mid <= PREMIUM_MAX_SPREAD_RATIO:
+                    price = mid
+        except Exception:
+            price = None
+        # 2) 最后成交价
+        if price is None:
+            for col in ("lastPrice", "regularMarketPrice"):
+                v = row.get(col)
+                try:
+                    if v is not None and float(v) > 0:
+                        price = float(v)
+                        break
+                except (TypeError, ValueError):
+                    continue
+        # 3) 盘口太虚时仍用中间价兜底 (好过没有)
+        if price is None:
+            try:
+                bid, ask = float(row.get("bid") or 0), float(row.get("ask") or 0)
+                if bid > 0 and ask > 0:
+                    price = (bid + ask) / 2.0
+            except Exception:
+                price = None
+
+        if price is not None and cache_key is not None:
+            _premium_cache_put(cache_key, float(price))
+        return float(price) if price else None
     except Exception as e:
         logger.debug(f"[DEBUG] option premium fetch failed: {e}")
         return None

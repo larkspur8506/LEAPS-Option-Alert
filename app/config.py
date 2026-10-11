@@ -140,6 +140,16 @@ class Config:
         止盈 RSI>65 时持仓平均只走到 +13%, 永远够不到 +50%, 该提醒从不触发)"""
         return self._float("leaps_half_tp_pnl", "LEAPS_HALF_TP_PNL", 0.0)
 
+    # ---- 通知通道 (Telegram 为第二通道; 任一缺失即禁用) ----
+
+    def get_telegram_bot_token(self) -> str:
+        """Telegram 通知 bot token (env TELEGRAM_BOT_TOKEN; 空 = 该通道禁用)。"""
+        return (os.getenv("TELEGRAM_BOT_TOKEN", "") or "").strip()
+
+    def get_telegram_chat_id(self) -> str:
+        """Telegram 通知目标 chat id (env TELEGRAM_CHAT_ID; 空 = 该通道禁用)。"""
+        return (os.getenv("TELEGRAM_CHAT_ID", "") or "").strip()
+
     # ---- 每日 16:30 日报模式 ----
     DAILY_REPORT_MODES = ("off", "leaps")
 

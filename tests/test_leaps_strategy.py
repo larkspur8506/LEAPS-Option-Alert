@@ -781,10 +781,259 @@ class LeapsEndToEndTest(unittest.TestCase):
         self.assertAlmostEqual(s["next_add_level_pct"], 0.15)
         self.assertAlmostEqual(s["next_add_trigger_price"], 480.0 * 0.85, places=2)
 
+    # ---- 2026-10-11 评审修复的回归 ----
+
+    def test_11_config_dict_covers_capital_keys(self):
+        """P1-1: /admin/rules 保存的 5 个新键必须进 _build_config_dict,
+        否则调度器 (启动快照) 永远读代码默认值, 改总资产不生效。"""
+        import app.main as main_mod
+        from app.database.models import Configuration
+
+        row = self.db.query(Configuration).first()
+        row.leaps_capital_mode = "pct"
+        row.leaps_total_assets = 1200000.0
+        row.leaps_capital_pct = 0.10
+        row.leaps_capital_cap = 999.0
+        row.leaps_iv_assumption = 0.30
+        self.db.commit()
+
+        cfg = main_mod.get_config(main_mod._build_config_dict(row))
+        self.assertEqual(cfg.get_capital_cap(), 120000.0)   # 1.2M × 10%
+        self.assertEqual(cfg.get_iv_assumption(), 0.30)
+        self.assertEqual(cfg.get_capital_mode(), "pct")
+
+    def test_12_jobs_reload_config_from_db(self):
+        """P1-2: 每轮任务从 DB 重载配置 -> 改完 /admin/rules 下一轮生效。"""
+        from app.scheduler import jobs
+        from app.database.models import Configuration
+
+        row = self.db.query(Configuration).first()
+        row.leaps_tp_rsi = 70.0
+        row.leaps_capital_mode = "pct"
+        row.leaps_total_assets = 2000000.0
+        row.leaps_capital_pct = 0.05
+        self.db.commit()
+
+        fresh = jobs._fresh_config(self.db, _FakeConfig(tp_rsi=65.0))
+        self.assertEqual(fresh.get_tp_rsi(), 70.0)          # 不再是启动快照的 65
+        self.assertEqual(fresh.get_capital_cap(), 100000.0)  # 2M × 5%
+
+        # DB 不可用时不得抛异常, 必须回退到一份可用配置 (env/默认或启动快照)
+        fallback = jobs._fresh_config(None, _FakeConfig(tp_rsi=61.0))
+        self.assertTrue(hasattr(fallback, "get_tp_rsi"))
+        self.assertIsInstance(fallback.get_tp_rsi(), float)
+
+    def test_13_add_alert_retries_after_send_failure(self):
+        """P1-3: 推送失败不置去重 -> 下一轮重试; 只有成功才置位。"""
+        from unittest.mock import patch
+
+        from app.alerts import dedup
+        from app.alerts.leaps_monitor import process_leaps_position
+        from app.alerts.qqq_rules import check_entry_signal
+        from app.services import leaps_service
+
+        dedup.clear_dedup()
+        sig = check_entry_signal(_make_qqq())
+        rec = leaps_service.create_waiting_position(self.db, sig, _FakeConfig())
+        leaps_service.confirm_entry(
+            self.db, rec.id, strike=450.0,
+            expiration=date.today() + timedelta(days=700),
+            entry_price=100.0, quantity=1,
+        )
+
+        class _FailNotifier:
+            def send_message(self, message):
+                return False
+
+        class _OkNotifier:
+            def send_message(self, message):
+                return True
+
+        qqq = _make_qqq(closed_price=408.0, closed_rsi=30.0)   # 回撤 -15% 命中第一档
+        with patch("app.alerts.leaps_monitor._is_data_fresh", return_value=True):
+            out = process_leaps_position(self.db, qqq, notifier=_FailNotifier(), config=_FakeConfig())
+        self.assertEqual(out["action"], "ADD_SEND_FAILED")
+
+        # 失败记录不算已提醒 -> 下一轮用正常 notifier 必须还能发出来
+        with patch("app.alerts.leaps_monitor._is_data_fresh", return_value=True):
+            out2 = process_leaps_position(self.db, qqq, notifier=_OkNotifier(), config=_FakeConfig())
+        self.assertEqual(out2["action"], "ADD_ALERTED")
+
+        from app.database.models import AlertLog
+        rows = self.db.query(AlertLog).filter(
+            AlertLog.alert_type == "LEAPS_ADD_LOT",
+            AlertLog.position_id == rec.id).all()
+        self.assertEqual(len(rows), 2)                          # 一失败一成功
+        self.assertFalse(bool(rows[0].sent_successfully))
+        self.assertTrue(bool(rows[1].sent_successfully))
+
+    def test_14_alerted_within_success_only(self):
+        """P1-3: 只统计成功送达的记录 (否则一次抖动就把提醒永久吞掉)。"""
+        from app.alerts.alert_log import alerted_within, log_alert
+
+        log_alert(self.db, "LEAPS_TEST_FAIL", "t", "msg", success=False)
+        self.assertTrue(alerted_within(self.db, "LEAPS_TEST_FAIL", within_seconds=3600))
+        self.assertFalse(alerted_within(self.db, "LEAPS_TEST_FAIL", within_seconds=3600,
+                                        success_only=True))
+
+        log_alert(self.db, "LEAPS_TEST_FAIL", "t", "msg", success=True)
+        self.assertTrue(alerted_within(self.db, "LEAPS_TEST_FAIL", within_seconds=3600,
+                                       success_only=True))
+
+    def test_15_entry_signal_bar_date_is_date_only(self):
+        """P3: 提醒文案里的判定基准不应带 " 00:00:00-04:00"。"""
+        from app.alerts.qqq_rules import check_entry_signal
+
+        sig = check_entry_signal(_make_qqq())
+        self.assertIsNotNone(sig)
+        self.assertRegex(sig["signal_bar_date"], r"^\d{4}-\d{2}-\d{2}$")
+
 
 # ===========================================================================
 # 7. 通知格式化
 # ===========================================================================
+
+class TestNotificationReliability(unittest.TestCase):
+    """P1-3 / P2-8: 发送重试、长消息分段、去重查询与置位分离。"""
+
+    def test_message_chunking_short_passthrough(self):
+        from app.notification.wechat import split_message_chunks
+
+        self.assertEqual(split_message_chunks("hello"), ["hello"])
+
+    def test_message_chunking_long_message(self):
+        from app.notification.wechat import split_message_chunks
+
+        msg = "\n".join("行 %d %s" % (i, "x" * 120) for i in range(40))
+        chunks = split_message_chunks(msg, 500)
+        self.assertGreater(len(chunks), 1)
+        for c in chunks:
+            self.assertLessEqual(len(c.encode("utf-8")), 500)
+        # 内容不丢 (去掉换行后逐字符一致)
+        self.assertEqual("".join(chunks).replace("\n", ""), msg.replace("\n", ""))
+
+    def test_wechat_retry_then_success(self):
+        from unittest.mock import patch
+
+        from app.notification.wechat import WeChatNotifier
+
+        calls = {"n": 0}
+
+        class _Resp:
+            status_code = 200
+
+            def json(self):
+                return {"errcode": 0}
+
+        def fake_post(*a, **k):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("boom")
+            return _Resp()
+
+        n = WeChatNotifier("https://example.invalid/hook")
+        with patch("app.notification.wechat.requests.post", side_effect=fake_post), \
+                patch("app.notification.wechat.time.sleep", return_value=None):
+            self.assertTrue(n.send_message("hello"))
+        self.assertEqual(calls["n"], 3)
+
+    def test_wechat_retry_exhausted(self):
+        from unittest.mock import patch
+
+        from app.notification.wechat import WeChatNotifier
+
+        class _Resp:
+            status_code = 500
+
+            def json(self):
+                return {}
+
+        n = WeChatNotifier("https://example.invalid/hook")
+        with patch("app.notification.wechat.requests.post", return_value=_Resp()) as p, \
+                patch("app.notification.wechat.time.sleep", return_value=None):
+            self.assertFalse(n.send_message("hello"))
+        self.assertEqual(p.call_count, n.SEND_ATTEMPTS)
+
+    def test_telegram_notifier_retry_then_success(self):
+        from unittest.mock import patch
+
+        from app.notification.telegram import TelegramNotifier
+
+        calls = {"n": 0}
+
+        class _Resp:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True}
+
+        def fake_post(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("boom")
+            return _Resp()
+
+        n = TelegramNotifier("123:abc", "7474962046")
+        with patch("app.notification.telegram.requests.post", side_effect=fake_post), \
+                patch("app.notification.telegram.time.sleep", return_value=None):
+            self.assertTrue(n.send_message("hi"))
+        self.assertEqual(calls["n"], 2)
+
+    def test_telegram_notifier_disabled_without_credentials(self):
+        from app.notification.telegram import TelegramNotifier
+
+        self.assertFalse(TelegramNotifier("", "").send_message("hi"))
+        self.assertFalse(TelegramNotifier("123:abc", "").enabled)
+
+    def test_composite_notifier_partial_delivery_counts_as_success(self):
+        from app.notification.dispatch import CompositeNotifier
+
+        class _Ok:
+            def send_message(self, m):
+                return True
+
+        class _Bad:
+            def send_message(self, m):
+                return False
+
+        self.assertTrue(CompositeNotifier([("a", _Bad()), ("b", _Ok())]).send_message("x"))
+        self.assertFalse(CompositeNotifier([("a", _Bad())]).send_message("x"))
+        self.assertFalse(CompositeNotifier([]).send_message("x"))
+
+    def test_get_notifier_channel_selection(self):
+        from app.notification.dispatch import get_notifier
+
+        class _Cfg:
+            def __init__(self, wh="", tok="", chat=""):
+                self._wh, self._tok, self._chat = wh, tok, chat
+
+            def get_wechat_webhook_url(self):
+                return self._wh
+
+            def get_telegram_bot_token(self):
+                return self._tok
+
+            def get_telegram_chat_id(self):
+                return self._chat
+
+        self.assertIsNone(get_notifier(_Cfg()))
+        only_tg = get_notifier(_Cfg(tok="123:abc", chat="1"))
+        self.assertEqual([name for name, _ in only_tg.channels], ["telegram"])
+        both = get_notifier(_Cfg(wh="https://example.invalid/hook", tok="123:abc", chat="1"))
+        self.assertEqual([name for name, _ in both.channels], ["wecom", "telegram"])
+        # 日报便捷封装走同一 send_message
+        self.assertTrue(hasattr(both, "send_leaps_report"))
+
+    def test_dedup_check_then_mark(self):
+        from app.alerts import dedup
+
+        dedup.clear_dedup()
+        self.assertFalse(dedup.was_alerted("KEY_X"))
+        self.assertFalse(dedup.was_alerted("KEY_X"))   # 查询不置位
+        dedup.mark_alerted("KEY_X")
+        self.assertTrue(dedup.was_alerted("KEY_X"))
+        dedup.clear_dedup()
+
 
 class TestNotificationFormat(unittest.TestCase):
     def test_1_entry_message_contains_contract_suggestion(self):
