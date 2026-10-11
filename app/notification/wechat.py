@@ -105,26 +105,55 @@ def _market_section(current_price: Any, indicators: Dict[str, Any]) -> list:
     return lines
 
 
-def _suggest_contract_lines(position: Any) -> list:
-    """建议合约区块 (0.65Δ / 约18个月 LEAPS call)"""
+def _suggest_contract_lines(position: Any, config: Any = None) -> list:
+    """建议合约区块 (Delta / 期限 / 行权价 / 张数; 张数由资金额度换算)。"""
     delta = _get(position, "suggested_delta", DEFAULT_TARGET_DELTA)
     tenor = _get(position, "suggested_tenor_days", DEFAULT_TARGET_TENOR_DAYS)
-    return [
+    strike = _get(position, "suggested_strike", None)
+    premium = _get(position, "suggested_premium", None)
+    qty = _get(position, "suggested_quantity", None)
+    expiry = _get(position, "suggested_expiry", None)
+    cap = config.get_capital_cap() if (config is not None and hasattr(config, "get_capital_cap")) else None
+    lines = [
         "📐 建议合约 (仅供参考)",
         f"类型：QQQ Call (LEAPS)",
         f"Delta：≈ {_fmt_num(delta)} (轻微实值)",
         f"期限：≈ {int(tenor)} 天 (约 {tenor/365*12:.0f} 个月) 到期",
-        "张数：1 张起 (回落加仓, 见下方计划)",
     ]
+    if strike:
+        tail = f"  到期：{expiry}" if expiry else ""
+        lines.append(f"行权价：≈ {_fmt_num(strike, 0)}{tail}")
+    if premium:
+        lines.append(f"权利金：≈ ${_fmt_num(premium)} / 股 (单张 ≈ ${_fmt_num(premium*100, 0)})")
+    if qty:
+        try:
+            amount = float(premium or 0) * 100.0 * int(qty)
+            cap_txt = (f"（额度 ${_fmt_num(cap, 0)}，占用 {amount/cap*100:.0f}%）" if cap else "")
+        except Exception:
+            cap_txt = ""
+        lines.append(f"张数：{int(qty)} 张{cap_txt}")
+    else:
+        lines.append("张数：按资金额度自行决定")
+    return lines
 
 
-def _add_plan_lines(add_levels: Any, max_qty: Any) -> list:
+def _add_plan_lines(add_levels: Any, max_qty: Any, capital_cap: Any = None) -> list:
     levels = add_levels if isinstance(add_levels, (list, tuple)) else [0.15, 0.25]
     level_text = " / ".join(f"-{_fmt_pct_compact(l)}" for l in levels)
+    try:
+        hard = int(max_qty or 0)
+    except (TypeError, ValueError):
+        hard = 0
+    if hard > 0:
+        cap_line = f"最大张数：{hard} 张"
+    elif capital_cap:
+        cap_line = f"最大张数：由资金额度决定（额度 ${_fmt_num(capital_cap, 0)}）"
+    else:
+        cap_line = "最大张数：不限"
     return [
         "➕ 加仓计划",
         f"回撤档位：{level_text} (且 RSI 仍 < 入场阈值)",
-        f"最大张数：{_fmt_num(max_qty, 0)} 张",
+        cap_line,
     ]
 
 
@@ -163,15 +192,15 @@ def format_leaps_entry(position: Any, qqq_data: Dict[str, Any], config: Any,
         "",
         "🎯 入场条件",
         f"RSI：{_fmt_num(qqq_data.get('closed_rsi'))} (阈值 < {_fmt_num(entry_rsi, 0)})",
-        "SMA200：连续 3 日收盘在上方 ✓",
         "52周：收盘价高于一年前 ✓",
         "",
     ]
-    lines += _suggest_contract_lines(position)
+    lines += _suggest_contract_lines(position, config)
     lines += [""]
     lines += _add_plan_lines(
         config.get_add_levels() if config else None,
-        config.get_max_quantity() if config else 3,
+        config.get_max_quantity() if config else 0,
+        config.get_capital_cap() if (config and hasattr(config, "get_capital_cap")) else None,
     )
     lines += [
         "",

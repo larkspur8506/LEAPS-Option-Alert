@@ -86,10 +86,42 @@ def create_waiting_position(db: Session, signal: Dict[str, Any],
         add_count=0,
         created_at=get_current_time(),
     )
+    _apply_contract_suggestion(rec, config)
     db.add(rec)
     db.commit()
     db.refresh(rec)
     return rec
+
+
+def _apply_contract_suggestion(rec: OptionPosition, config: Any) -> None:
+    """按目标 delta/期限算建议合约, 并按资金额度换算建议张数 (全部尽力而为, 失败不影响建仓)。
+
+    真实期权链中间价优先 (yfinance, 失败则退回 BS 理论值)。
+    """
+    try:
+        from app.market.option_math import suggest_contract, contracts_for_capital
+        from app.alerts.qqq_rules import fetch_option_premium
+
+        spot = float(rec.signal_base_price or 0)
+        if spot <= 0:
+            return
+        delta = float(config.get_target_delta())
+        tenor = int(config.get_target_tenor_days())
+        iv = float(config.get_iv_assumption())
+        cap = float(config.get_capital_cap())
+        strike, expiry, theo = suggest_contract(spot, tenor, delta, iv)
+        premium = None
+        try:
+            premium = fetch_option_premium(strike, expiry)
+        except Exception:
+            premium = None
+        used = float(premium) if premium and float(premium) > 0 else float(theo)
+        rec.suggested_strike = float(strike)
+        rec.suggested_expiry = expiry
+        rec.suggested_premium = round(used, 2)
+        rec.suggested_quantity = contracts_for_capital(cap, used)
+    except Exception as e:
+        logger.warning(f"[LEAPS Service] contract suggestion skipped: {e}")
 
 
 def confirm_entry(db: Session, position_id: int, strike: float, expiration: date,
@@ -107,7 +139,9 @@ def confirm_entry(db: Session, position_id: int, strike: float, expiration: date
         raise OptionParameterError("expiration_date is required.")
     if entry_price is None or entry_price <= 0:
         raise OptionParameterError("entry_price must be positive.")
-    if quantity is None or quantity < 1:
+    if quantity is None:
+        quantity = int(getattr(rec, "suggested_quantity", 0) or 0) or 1
+    if quantity < 1:
         raise OptionParameterError("quantity must be >= 1.")
 
     rec.status = "HOLDING"
@@ -300,6 +334,10 @@ def get_leaps_dashboard(db: Session, qqq_data: Optional[Dict[str, Any]]) -> Dict
             "signal_rsi": rec.signal_rsi,
             "suggested_delta": rec.suggested_delta,
             "suggested_tenor_days": rec.suggested_tenor_days,
+            "suggested_strike": getattr(rec, "suggested_strike", None),
+            "suggested_premium": getattr(rec, "suggested_premium", None),
+            "suggested_quantity": getattr(rec, "suggested_quantity", None),
+            "suggested_expiry": rec.suggested_expiry.isoformat() if getattr(rec, "suggested_expiry", None) else None,
             "strike": rec.strike,
             "expiration_date": rec.expiration_date.isoformat() if rec.expiration_date else None,
             "entry_price": rec.entry_price,
@@ -346,9 +384,13 @@ def get_leaps_dashboard(db: Session, qqq_data: Optional[Dict[str, Any]]) -> Dict
             if holding.expiration_date:
                 summary["dte"] = (holding.expiration_date - today).days
             if qqq.get("closed_price") and cfg:
+                from app.market.option_math import effective_max_contracts
                 levels = cfg.get_add_levels()
                 add_count = int(holding.add_count or 0)
-                if holding.quantity and holding.quantity < cfg.get_max_quantity() and add_count < len(levels):
+                eff_cap = effective_max_contracts(
+                    cfg.get_max_quantity(), cfg.get_capital_cap(), float(holding.entry_price or 0))
+                within_cap = (eff_cap == 0) or (holding.quantity and holding.quantity < eff_cap)
+                if within_cap and add_count < len(levels):
                     base = holding.signal_base_price
                     cur = qqq["closed_price"]
                     if base:

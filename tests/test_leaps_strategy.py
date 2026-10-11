@@ -1,7 +1,7 @@
 """QQQ LEAPS 策略测试套件。
 
 覆盖:
-1. 入场信号三条件 (RSI / SMA200 三日上方 / 52 周) 与收盘确认制口径
+1. 入场信号两条件 (RSI / 52 周, 2026-10-11 起不再要求 SMA200) 与收盘确认制口径
 2. 退出线优先级 (RSI_TP > TIME_STOP > DTE_FORCE) 与"先到先出"
 3. 加仓判定 (档位顺序 / RSI 仍超卖 / 最大张数)
 4. OptionPosition 状态机 (WAITING/HOLDING/CLOSED + DISMISSED/EXPIRED + 闸门唯一性)
@@ -69,6 +69,8 @@ class _FakeConfig:
         self.tenor = kw.get("tenor", 365)
         self.waiting_ttl = kw.get("waiting_ttl", 3)
         self.half_tp = kw.get("half_tp", 0.5)
+        self.capital_cap = kw.get("capital_cap", 100000.0)
+        self.iv_assumption = kw.get("iv_assumption", 0.22)
 
     def get_entry_rsi_threshold(self):
         return self.entry_rsi
@@ -100,6 +102,12 @@ class _FakeConfig:
     def get_half_tp_pnl(self):
         return self.half_tp
 
+    def get_capital_cap(self):
+        return self.capital_cap
+
+    def get_iv_assumption(self):
+        return self.iv_assumption
+
 
 # ===========================================================================
 # 1. 入场信号
@@ -119,10 +127,41 @@ class TestEntrySignal(unittest.TestCase):
 
         self.assertIsNone(check_entry_signal(_make_qqq(closed_rsi=40.0)))
 
-    def test_3_below_ma200_trend_filter(self):
+    def test_3_sma200_not_required(self):
+        """2026-10-11 修订: 入场不再要求站上 SMA200 (只保留 52 周趋势过滤)。"""
         from app.alerts.qqq_rules import check_entry_signal
 
-        self.assertIsNone(check_entry_signal(_make_qqq(closed_is_above_sma200_3d=False)))
+        self.assertIsNotNone(check_entry_signal(_make_qqq(closed_is_above_sma200_3d=False)))
+
+    def test_3b_option_math_delta_roundtrip(self):
+        """按目标 delta 反解的行权价, 实际 delta 应回到目标值 (±0.01)。"""
+        import math
+        from statistics import NormalDist
+        from app.market.option_math import strike_for_delta
+
+        spot, iv, r, q = 751.0, 0.22, 0.042, 0.0055
+        strike = strike_for_delta(spot, 365, 0.70, iv, r, q)
+        d1 = (math.log(spot / strike) + (r - q + 0.5 * iv * iv)) / (iv * math.sqrt(1.0))
+        delta = math.exp(-q) * NormalDist().cdf(d1)
+        self.assertAlmostEqual(delta, 0.70, delta=0.01)
+
+    def test_3c_contracts_for_capital(self):
+        from app.market.option_math import contracts_for_capital, effective_max_contracts
+
+        self.assertEqual(contracts_for_capital(100000, 87.0), 11)
+        self.assertEqual(contracts_for_capital(100000, 0), 1)
+        self.assertEqual(contracts_for_capital(0, 87.0), 0)
+        self.assertEqual(effective_max_contracts(3, 100000, 87.0), 3)
+        self.assertEqual(effective_max_contracts(0, 100000, 87.0), 11)
+        self.assertEqual(effective_max_contracts(0, 0, 87.0), 0)
+
+    def test_3d_standard_expiry_is_third_friday(self):
+        import datetime
+        from app.market.option_math import standard_expiry
+
+        exp = standard_expiry(datetime.date(2026, 10, 12) + datetime.timedelta(days=365))
+        self.assertEqual(exp.weekday(), 4)
+        self.assertEqual(exp, datetime.date(2027, 10, 15))
 
     def test_4_below_1y_price_filter(self):
         from app.alerts.qqq_rules import check_entry_signal

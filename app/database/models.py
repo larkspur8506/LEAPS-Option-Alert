@@ -28,7 +28,9 @@ class Configuration(Base):
     leaps_max_quantity = Column(Integer, nullable=True)      # 单信号最大张数 (默认 3)
     leaps_target_delta = Column(Float, nullable=True)        # 建议 Delta (默认 0.65)
     leaps_target_tenor_days = Column(Integer, nullable=True) # 建议期限 (默认 365 天 ≈ 1 年)
-    leaps_half_tp_pnl = Column(Float, nullable=True)         # 分批止盈: PnL≥该比例提醒卖半 (0=关闭, 默认 0.5)
+    leaps_half_tp_pnl = Column(Float, nullable=True)         # 分批止盈: PnL≥该比例提醒卖半 (0=关闭, 默认 0)
+    leaps_capital_cap = Column(Float, nullable=True)         # 单信号资金额度上限 USD (0/NULL=不限, 默认 100000)
+    leaps_iv_assumption = Column(Float, nullable=True)       # 建议行权价用的 IV 假设 (默认 0.22)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -73,8 +75,12 @@ class OptionPosition(Base):
     signal_base_price = Column(Float, nullable=False)   # 触发日 QQQ 收盘价 (加仓判断基准)
     signal_rsi = Column(Float, nullable=True)           # 触发时 RSI
     signal_bar_date = Column(String(30), nullable=True) # 判定基准 bar (收盘确认制)
-    suggested_delta = Column(Float, nullable=True)      # 建议 Delta (0.65)
-    suggested_tenor_days = Column(Integer, nullable=True)  # 建议期限 (交易日)
+    suggested_delta = Column(Float, nullable=True)      # 建议 Delta (0.70)
+    suggested_tenor_days = Column(Integer, nullable=True)  # 建议期限 (自然日)
+    suggested_strike = Column(Float, nullable=True)     # 建议行权价 (按目标 delta 反解, 取整到 $5)
+    suggested_premium = Column(Float, nullable=True)    # 建议合约每张权利金 (真实链上中间价优先, 否则 BS 理论值)
+    suggested_quantity = Column(Integer, nullable=True) # 建议张数 (= 资金额度 / 单张权利金)
+    suggested_expiry = Column(Date, nullable=True)      # 建议到期日 (对齐标准月度到期)
 
     # --- 用户录入 (确认买入时写入, 此后仅 quantity/total_cost 随加仓变化) ---
     strike = Column(Float, nullable=True)

@@ -1,9 +1,11 @@
 """QQQ LEAPS 策略规则引擎 (纯函数, 无 DB 依赖)。
 
-入场 (回测定稿, QQQ 1999-2026 共 49 个历史信号验证):
+入场 (2026-10-11 复测修订):
   1. RSI14 < 35 (收盘确认制: 用最后一根已收盘 bar 判定)
-  2. 最近 3 个交易日收盘均高于 SMA200
-  3. 收盘价 > 一年前收盘价 (52 周趋势过滤, 砍掉 2000/2008 式接飞刀)
+  2. 收盘价 > 一年前收盘价 (52 周趋势过滤)
+     —— 这是承重墙: 去掉它 2001-2026 样本最差单笔 -95.8%、复利权益 0.02x (爆仓)。
+     原「连续 3 日 > SMA200」条件已于 2026-10-11 移除: 与 52 周过滤高度重叠,
+     去掉后 CAGR 12.6% -> 15.1%、最差单笔不变 (-39.2%)、两段样本都更好。
 
 持仓退出 (先到先出):
   - RSI14 > TP 阈值 (默认 65): 止盈全部清仓
@@ -51,11 +53,7 @@ def check_entry_signal(qqq_data: Dict[str, Any], rsi_threshold: float = 35.0) ->
     if not (rsi < rsi_threshold):
         return None
 
-    # 条件 2: 连续 3 日收盘在 SMA200 上方
-    if not qqq_data.get("closed_is_above_sma200_3d", False):
-        return None
-
-    # 条件 3: 收盘价高于一年前 (52 周趋势过滤)
+    # 条件 2: 收盘价高于一年前 (52 周趋势过滤; 2026-10-11 起不再要求站上 SMA200)
     p1y = qqq_data.get("closed_price_1y_ago")
     if p1y is None or not (price > p1y):
         return None
@@ -202,13 +200,18 @@ def evaluate_position(position: Any, qqq_data: Dict[str, Any], config: Any,
 def _check_add_trigger(position: Any, qqq_data: Dict[str, Any], config: Any) -> Optional[Dict[str, Any]]:
     """加仓判定: 回撤达下一档位 + RSI 仍在入场区 + 未达最大张数。"""
     try:
+        from app.market.option_math import effective_max_contracts
+
         levels = config.get_add_levels()
-        max_q = config.get_max_quantity()
+        # 张数上限 = min(硬上限, 资金额度/单张成本); 0 = 不限 (2026-10-11 起默认由额度决定)
+        max_q = effective_max_contracts(
+            config.get_max_quantity(), config.get_capital_cap(),
+            float(getattr(position, "entry_price", 0) or 0))
         entry_rsi = config.get_entry_rsi_threshold()
 
         qty = int(getattr(position, "quantity", 0) or 0)
         add_count = int(getattr(position, "add_count", 0) or 0)
-        if qty <= 0 or qty >= max_q:
+        if qty <= 0 or (max_q and qty >= max_q):
             return None
         if add_count >= len(levels):
             return None

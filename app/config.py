@@ -81,21 +81,30 @@ class Config:
         return levels or [0.15, 0.25]
 
     def get_max_quantity(self) -> int:
-        """单信号最大张数 (首张 + 加仓), 默认 3"""
-        v = self._int("leaps_max_quantity", "LEAPS_MAX_QUANTITY", 3)
-        return max(1, v)
+        """单信号最大张数硬上限 (0 = 不限, 由资金额度决定; 2026-10-11 起默认 0)"""
+        v = self._int("leaps_max_quantity", "LEAPS_MAX_QUANTITY", 0)
+        return max(0, v)
+
+    def get_capital_cap(self) -> float:
+        """单信号资金额度上限 (USD, 0 = 不限)。张数 = 额度 / 单张权利金, 至少 1 张。"""
+        return self._float("leaps_capital_cap", "LEAPS_CAPITAL_CAP", 100000.0)
+
+    def get_iv_assumption(self) -> float:
+        """建议行权价用的期权 IV 假设 (小数, 默认 0.22); 真实报价优先用于张数换算。"""
+        return self._float("leaps_iv_assumption", "LEAPS_IV_ASSUMPTION", 0.22)
 
     def get_target_delta(self) -> float:
-        """建议 Delta (回测 0.60-0.70 差异小, 取 0.65)"""
-        return self._float("leaps_target_delta", "LEAPS_TARGET_DELTA", 0.65)
+        """建议 Delta (2026-10-11 回测: 0.70 优于 0.65, 收益与尾部同时改善)"""
+        return self._float("leaps_target_delta", "LEAPS_TARGET_DELTA", 0.70)
 
     def get_target_tenor_days(self) -> int:
         """建议期限 (自然日, 2026-10 复测定稿约 1 年 = 365)"""
         return self._int("leaps_target_tenor_days", "LEAPS_TARGET_TENOR_DAYS", 365)
 
     def get_half_tp_pnl(self) -> float:
-        """分批止盈: 总盈利≥该比例时提醒卖出一半 (0 = 关闭; 2026-10 复测定稿 0.5)"""
-        return self._float("leaps_half_tp_pnl", "LEAPS_HALF_TP_PNL", 0.5)
+        """分批止盈: 总盈利≥该比例时提醒卖出一半 (0 = 关闭; 2026-10-11 起默认关闭 ——
+        止盈 RSI>65 时持仓平均只走到 +13%, 永远够不到 +50%, 该提醒从不触发)"""
+        return self._float("leaps_half_tp_pnl", "LEAPS_HALF_TP_PNL", 0.0)
 
     # ---- 每日 16:30 日报模式 ----
     DAILY_REPORT_MODES = ("off", "leaps")
@@ -146,6 +155,8 @@ def load_config_from_db(db) -> Config:
             "leaps_target_delta": getattr(row, "leaps_target_delta", None),
             "leaps_target_tenor_days": getattr(row, "leaps_target_tenor_days", None),
             "leaps_half_tp_pnl": getattr(row, "leaps_half_tp_pnl", None),
+            "leaps_capital_cap": getattr(row, "leaps_capital_cap", None),
+            "leaps_iv_assumption": getattr(row, "leaps_iv_assumption", None),
         })
     except Exception:
         return get_config()

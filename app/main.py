@@ -406,6 +406,8 @@ async def rules(request: Request, db: Session = Depends(get_db)):
         "dte_force_days": runtime_config.get_dte_force_days(),
         "add_levels": ",".join(f"{v:.2f}".rstrip("0").rstrip(".") for v in runtime_config.get_add_levels()),
         "max_quantity": runtime_config.get_max_quantity(),
+        "capital_cap": runtime_config.get_capital_cap(),
+        "iv_assumption": runtime_config.get_iv_assumption(),
         "target_delta": runtime_config.get_target_delta(),
         "target_tenor_days": runtime_config.get_target_tenor_days(),
         "half_tp_pnl": runtime_config.get_half_tp_pnl(),
@@ -438,8 +440,10 @@ async def update_strategy(
     time_stop_days: str = Form(...),
     dte_force_days: str = Form(...),
     add_levels: str = Form("0.15,0.25"),
-    max_quantity: str = Form("3"),
-    target_delta: str = Form("0.65"),
+    max_quantity: str = Form("0"),
+    capital_cap: str = Form("100000"),
+    iv_assumption: str = Form("0.22"),
+    target_delta: str = Form("0.70"),
     target_tenor_days: str = Form("365"),
     half_tp_pnl: str = Form("0.5"),
     db: Session = Depends(get_db),
@@ -455,7 +459,10 @@ async def update_strategy(
         config_db.leaps_time_stop_trading_days = _parse_int(time_stop_days, current.get_time_stop_trading_days())
         config_db.leaps_dte_force_days = _parse_int(dte_force_days, current.get_dte_force_days())
         config_db.leaps_add_levels = str(add_levels).strip() or "0.15,0.25"
-        config_db.leaps_max_quantity = max(1, _parse_int(max_quantity, current.get_max_quantity()))
+        config_db.leaps_max_quantity = max(0, _parse_int(max_quantity, current.get_max_quantity()))
+        config_db.leaps_capital_cap = max(0.0, _parse_float(capital_cap, current.get_capital_cap()))
+        iv_val = _parse_float(iv_assumption, current.get_iv_assumption())
+        config_db.leaps_iv_assumption = min(1.0, max(0.05, iv_val))
         config_db.leaps_target_delta = _parse_float(target_delta, current.get_target_delta())
         config_db.leaps_target_tenor_days = _parse_int(target_tenor_days, current.get_target_tenor_days())
         half_val = _parse_float(half_tp_pnl, current.get_half_tp_pnl())
