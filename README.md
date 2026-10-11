@@ -84,6 +84,44 @@ docker compose up -d
 | `LEAPS_HALF_TP_PNL` | `0` | 分批止盈阈值（总盈利比例，0 = 关闭） |
 | `WAITING_TTL_TRADING_DAYS` | `3` | WAITING 建议存活期（0 = 不过期） |
 | `DAILY_REPORT_MODE` | `leaps` | 日报模式（`off` / `leaps`） |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | 空 | 第二推送通道（Telegram）；任一为空即禁用该通道 |
+
+## 运维与可靠性
+
+### 通知通道（多通道，任一送达即算成功）
+
+| 通道 | 配置位置 | 说明 |
+|---|---|---|
+| 企业微信 | 环境变量 / 后台规则页（DB 优先） | 主通道 |
+| Telegram | 环境变量 `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | 第二通道；任一缺失即禁用 |
+
+- 发送最多 **3 次尝试 + 退避**（1s / 3s）；长消息按行分段（企业微信 text 上限 2048 字节），
+  不再出现"消息太长 → 发送失败 → 被去重吞掉"的静默丢失。
+- **去重只认成功送达**：`alert_logs.sent_successfully=0` 的记录不算"已提醒"，不会阻止
+  下一轮重试。一次网络抖动不再等于提醒永久丢失（加仓 / 分批止盈 / 日报同理）。
+- 多通道由 `app/notification/dispatch.py` 的 `CompositeNotifier` 分发：任一通道送达即视为
+  成功，全部失败才保留重试机会；部分送达打 warning 日志便于排障。
+
+### 单进程假设
+
+去重（`app/alerts/dedup.py`）与登录限速（`app/admin/security.py`）都是**进程内存**状态。
+uvicorn 必须保持单 worker（默认），**不要加 `--workers 2`**，否则去重与限速都会失效；
+跨重启的去重依赖 `alert_logs` 落库记录（已实现）。
+
+### 备份与看护
+
+- **每日备份**：oracle1 root cron `40 3 * * * /opt/backups/qqq-option-alert/backup.sh`
+  —— 容器内用 sqlite3 backup API 做一致性快照 → `docker cp` 到宿主 → `PRAGMA integrity_check`
+  → 保留 14 天；日志 `/var/log/qqq-backup.log`。
+- **死手看守**：Hermes cron 任务「QQQ LEAPS 看护」（`scripts/leaps-watch/leaps_watch.py`，
+  每 30 分钟）检查容器存活 / 健康检查 / 近 6 小时推送失败 / 日报超期；正常静默，
+  异常才推送。手工排查：`python3 leaps_watch.py --dry-run 24`。
+
+### 健康检查
+
+- `GET /health`：存活探针（容器 healthcheck 用）。
+- `GET /health/detailed`：**未鉴权**，因此只返回粗粒度状态（数据库 / 调度器 / 行情缓存是否新鲜），
+  **不主动抓行情、不暴露仓位或配置细节**；供外部看护脚本轮询。
 
 ## 项目结构
 
