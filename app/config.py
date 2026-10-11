@@ -85,9 +85,43 @@ class Config:
         v = self._int("leaps_max_quantity", "LEAPS_MAX_QUANTITY", 0)
         return max(0, v)
 
+    def _str(self, key: str, env_key: str, default: str) -> str:
+        raw = None
+        try:
+            raw = self._db_config.get(key)
+        except Exception:
+            raw = None
+        if raw is None or raw == "":
+            raw = os.getenv(env_key, default)
+        return str(raw).strip().lower()
+
+    def get_capital_mode(self) -> str:
+        """额度口径: 'pct' = 总资产 × 比例 (默认, 随资产规模自动增长); 'fixed' = 固定金额。"""
+        mode = self._str("leaps_capital_mode", "LEAPS_CAPITAL_MODE", "pct")
+        return mode if mode in ("pct", "fixed") else "pct"
+
+    def get_total_assets(self) -> float:
+        """组合总资产 (USD)。仅用于按比例换算单信号额度, 不参与其他计算。"""
+        return self._float("leaps_total_assets", "LEAPS_TOTAL_ASSETS", 800000.0)
+
+    def get_capital_pct(self) -> float:
+        """单信号额度占总资产的比例 (默认 0.125 = 12.5% -> $800k 组合 = $100k 额度)。"""
+        v = self._float("leaps_capital_pct", "LEAPS_CAPITAL_PCT", 0.125)
+        return v if v > 0 else 0.125
+
     def get_capital_cap(self) -> float:
-        """单信号资金额度上限 (USD, 0 = 不限)。张数 = 额度 / 单张权利金, 至少 1 张。"""
-        return self._float("leaps_capital_cap", "LEAPS_CAPITAL_CAP", 100000.0)
+        """单信号资金额度上限 (USD, 0 = 不限)。张数 = 额度 / 单张权利金, 至少 1 张。
+
+        2026-10-11 起默认口径为「总资产 × 比例」自动算 (总资产与比例在 /admin/rules 维护),
+        资产增长时只改总资产即可。配置非法时回退固定金额, 绝不因配置错误变成"不限"。
+        """
+        fixed = self._float("leaps_capital_cap", "LEAPS_CAPITAL_CAP", 100000.0)
+        if self.get_capital_mode() == "fixed":
+            return max(0.0, fixed)
+        cap = self.get_total_assets() * self.get_capital_pct()
+        if cap <= 0:
+            return max(0.0, fixed)
+        return round(cap, 2)
 
     def get_iv_assumption(self) -> float:
         """建议行权价用的期权 IV 假设 (小数, 默认 0.22); 真实报价优先用于张数换算。"""
@@ -157,6 +191,9 @@ def load_config_from_db(db) -> Config:
             "leaps_half_tp_pnl": getattr(row, "leaps_half_tp_pnl", None),
             "leaps_capital_cap": getattr(row, "leaps_capital_cap", None),
             "leaps_iv_assumption": getattr(row, "leaps_iv_assumption", None),
+            "leaps_capital_mode": getattr(row, "leaps_capital_mode", None),
+            "leaps_total_assets": getattr(row, "leaps_total_assets", None),
+            "leaps_capital_pct": getattr(row, "leaps_capital_pct", None),
         })
     except Exception:
         return get_config()

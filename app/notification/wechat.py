@@ -210,6 +210,7 @@ def format_leaps_entry(position: Any, qqq_data: Dict[str, Any], config: Any,
     lines += [
         "",
         "💡 操作提示",
+        "以上合约与张数仅为建议 (按额度上限推算), 实际以你成交并录入的仓位为准;",
         "请在券商手动买入合约, 并到后台「持仓页」确认建仓;",
         "未确认的建议将在 TTL 后自动过期。",
         "",

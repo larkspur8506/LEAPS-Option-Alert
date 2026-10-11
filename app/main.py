@@ -407,6 +407,10 @@ async def rules(request: Request, db: Session = Depends(get_db)):
         "add_levels": ",".join(f"{v:.2f}".rstrip("0").rstrip(".") for v in runtime_config.get_add_levels()),
         "max_quantity": runtime_config.get_max_quantity(),
         "capital_cap": runtime_config.get_capital_cap(),
+        "capital_mode": runtime_config.get_capital_mode(),
+        "total_assets": runtime_config.get_total_assets(),
+        "capital_pct": runtime_config.get_capital_pct(),
+        "capital_cap_effective": round(runtime_config.get_capital_cap(), 2),
         "iv_assumption": runtime_config.get_iv_assumption(),
         "target_delta": runtime_config.get_target_delta(),
         "target_tenor_days": runtime_config.get_target_tenor_days(),
@@ -442,6 +446,9 @@ async def update_strategy(
     add_levels: str = Form("0.15,0.25"),
     max_quantity: str = Form("0"),
     capital_cap: str = Form("100000"),
+    capital_mode: str = Form("pct"),
+    total_assets: str = Form("800000"),
+    capital_pct: str = Form("0.125"),
     iv_assumption: str = Form("0.22"),
     target_delta: str = Form("0.70"),
     target_tenor_days: str = Form("365"),
@@ -461,6 +468,11 @@ async def update_strategy(
         config_db.leaps_add_levels = str(add_levels).strip() or "0.15,0.25"
         config_db.leaps_max_quantity = max(0, _parse_int(max_quantity, current.get_max_quantity()))
         config_db.leaps_capital_cap = max(0.0, _parse_float(capital_cap, current.get_capital_cap()))
+        config_db.leaps_capital_mode = (capital_mode if capital_mode in ("pct", "fixed")
+                                        else current.get_capital_mode())
+        config_db.leaps_total_assets = max(0.0, _parse_float(total_assets, current.get_total_assets()))
+        pct_val = _parse_float(capital_pct, current.get_capital_pct())
+        config_db.leaps_capital_pct = min(1.0, max(0.0, pct_val))
         iv_val = _parse_float(iv_assumption, current.get_iv_assumption())
         config_db.leaps_iv_assumption = min(1.0, max(0.05, iv_val))
         config_db.leaps_target_delta = _parse_float(target_delta, current.get_target_delta())

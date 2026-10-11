@@ -70,9 +70,27 @@
                         <p class="text-[11px] text-gray-400 mt-1">含首张, 单信号仓位封顶</p>
                     </div>
                     <div>
-                        <label class="block text-xs font-medium text-gray-500 mb-1">资金额度上限 (USD, 0=不限)</label>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">额度口径</label>
+                        <select name="capital_mode" class="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm">
+                            <option value="pct" {% if capital_mode == 'pct' %}selected{% endif %}>总资产 × 比例（自动）</option>
+                            <option value="fixed" {% if capital_mode == 'fixed' %}selected{% endif %}>固定金额</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">组合总资产 (USD)</label>
+                        <input name="total_assets" type="number" step="1000" min="0" value="{{ total_assets }}" required
+                               class="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">额度比例（0.125 = 12.5%）</label>
+                        <input name="capital_pct" type="number" step="0.005" min="0" max="1" value="{{ capital_pct }}" required
+                               class="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-1">固定额度 (USD, 仅"固定金额"模式)</label>
                         <input name="capital_cap" type="number" step="1000" min="0" value="{{ capital_cap }}" required
                                class="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm">
+                        <p class="mt-1 text-xs text-gray-400">当前生效额度：${{ capital_cap_effective }}（建议值，以你实际录入的仓位为准）</p>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-gray-500 mb-1">建议行权价用 IV 假设 (小数)</label>

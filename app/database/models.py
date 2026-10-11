@@ -29,7 +29,10 @@ class Configuration(Base):
     leaps_target_delta = Column(Float, nullable=True)        # 建议 Delta (默认 0.65)
     leaps_target_tenor_days = Column(Integer, nullable=True) # 建议期限 (默认 365 天 ≈ 1 年)
     leaps_half_tp_pnl = Column(Float, nullable=True)         # 分批止盈: PnL≥该比例提醒卖半 (0=关闭, 默认 0)
-    leaps_capital_cap = Column(Float, nullable=True)         # 单信号资金额度上限 USD (0/NULL=不限, 默认 100000)
+    leaps_capital_cap = Column(Float, nullable=True)         # 固定额度 USD (0/NULL=不限; 仅 fixed 模式)
+    leaps_capital_mode = Column(String(20), nullable=True)   # 额度口径: pct(总资产×比例, 默认) / fixed
+    leaps_total_assets = Column(Float, nullable=True)        # 组合总资产 USD (按比例换算额度用, 默认 800000)
+    leaps_capital_pct = Column(Float, nullable=True)         # 单信号额度占总资产比例 (默认 0.125)
     leaps_iv_assumption = Column(Float, nullable=True)       # 建议行权价用的 IV 假设 (默认 0.22)
 
     created_at = Column(DateTime, server_default=func.now())

@@ -70,6 +70,9 @@ class _FakeConfig:
         self.waiting_ttl = kw.get("waiting_ttl", 3)
         self.half_tp = kw.get("half_tp", 0.5)
         self.capital_cap = kw.get("capital_cap", 100000.0)
+        self.capital_mode = kw.get("capital_mode", "fixed")
+        self.total_assets = kw.get("total_assets", 800000.0)
+        self.capital_pct = kw.get("capital_pct", 0.125)
         self.iv_assumption = kw.get("iv_assumption", 0.22)
 
     def get_entry_rsi_threshold(self):
@@ -102,8 +105,19 @@ class _FakeConfig:
     def get_half_tp_pnl(self):
         return self.half_tp
 
+    def get_capital_mode(self):
+        return self.capital_mode
+
+    def get_total_assets(self):
+        return self.total_assets
+
+    def get_capital_pct(self):
+        return self.capital_pct
+
     def get_capital_cap(self):
-        return self.capital_cap
+        if self.capital_mode == "fixed":
+            return self.capital_cap
+        return round(self.total_assets * self.capital_pct, 2)
 
     def get_iv_assumption(self):
         return self.iv_assumption
@@ -174,6 +188,24 @@ class TestEntrySignal(unittest.TestCase):
         d1 = (math.log(spot / strike) + (r - q + 0.5 * iv * iv)) / (iv * math.sqrt(1.0))
         delta = math.exp(-q) * NormalDist().cdf(d1)
         self.assertAlmostEqual(delta, 0.70, delta=0.01)
+
+    def test_3c2_capital_cap_modes(self):
+        """额度口径: pct = 总资产 × 比例 (默认); fixed = 固定金额; 非法值回退不放大。"""
+        from app.config import Config
+
+        c = Config({"leaps_capital_mode": "pct", "leaps_total_assets": 800000,
+                    "leaps_capital_pct": 0.125})
+        self.assertEqual(c.get_capital_cap(), 100000.0)
+        c2 = Config({"leaps_capital_mode": "pct", "leaps_total_assets": 1200000,
+                     "leaps_capital_pct": 0.125})
+        self.assertEqual(c2.get_capital_cap(), 150000.0)   # 资产增长 -> 额度自动增长
+        c3 = Config({"leaps_capital_mode": "fixed", "leaps_capital_cap": 50000})
+        self.assertEqual(c3.get_capital_cap(), 50000.0)
+        c4 = Config({"leaps_capital_mode": "pct", "leaps_total_assets": 0,
+                     "leaps_capital_pct": 0, "leaps_capital_cap": 70000})
+        self.assertEqual(c4.get_capital_cap(), 70000.0)    # 非法 pct -> 回退固定值, 不会变"不限"
+        c5 = Config({"leaps_capital_mode": "bogus"})
+        self.assertEqual(c5.get_capital_mode(), "pct")     # 非法模式 -> 默认 pct
 
     def test_3c_contracts_for_capital(self):
         from app.market.option_math import contracts_for_capital, effective_max_contracts
