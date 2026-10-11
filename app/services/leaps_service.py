@@ -363,6 +363,12 @@ def get_leaps_dashboard(db: Session, qqq_data: Optional[Dict[str, Any]]) -> Dict
     qqq = dict(qqq_data) if isinstance(qqq_data, dict) else {}
     for k in _QQQ_KEYS:
         qqq.setdefault(k, None)
+    # 模板用 {{ leaps_dash|tojson }} 渲染: date/datetime 不是 JSON 原生类型,
+    # 直接透传会让 /admin 抛 TypeError (Object of type date is not JSON serializable) -> 500。
+    # DataFetcher.get_qqq_data() 的 "date" 字段就是 datetime.date, 必须转 isoformat。
+    for _k, _v in list(qqq.items()):
+        if isinstance(_v, date):  # datetime 是 date 的子类, 一并覆盖
+            qqq[_k] = _v.isoformat()
 
     dashboard = {
         "qqq": qqq,

@@ -403,6 +403,21 @@ class LeapsEndToEndTest(unittest.TestCase):
         self.client = TestClient(main_mod.app)
         login_client(self.client)
 
+    def test_dashboard_json_safe_with_date(self):
+        """/admin 模板用 {{ leaps_dash|tojson }} 渲染: qqq 字典里的 date 必须转字符串,
+        否则 TypeError: Object of type date is not JSON serializable -> 页面 500。"""
+        import json
+
+        from app.services.leaps_service import get_leaps_dashboard
+
+        dash = get_leaps_dashboard(
+            self.db,
+            {"date": date(2026, 10, 11), "closed_price": 751.0, "last_price": 751.0,
+             "closed_bar_date": "2026-10-09"},
+        )
+        json.dumps(dash)  # 不抛异常即通过
+        self.assertEqual(dash["qqq"]["date"], "2026-10-11")
+
     def tearDown(self):
         import app.main as main_mod
         import app.database.init_db as init_db_mod
