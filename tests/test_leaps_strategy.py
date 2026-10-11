@@ -133,6 +133,36 @@ class TestEntrySignal(unittest.TestCase):
 
         self.assertIsNotNone(check_entry_signal(_make_qqq(closed_is_above_sma200_3d=False)))
 
+    def test_3f_entry_notification_without_suggestion_fields(self):
+        """建议字段全 NULL (历史/异常记录): 入场提醒也必须能渲染, 不能因缺字段崩溃。"""
+        from types import SimpleNamespace
+
+        from app.notification.wechat import format_leaps_entry
+
+        rec = SimpleNamespace(suggested_delta=None, suggested_tenor_days=None,
+                              suggested_strike=None, suggested_premium=None,
+                              suggested_quantity=None, suggested_expiry=None,
+                              signal_base_price=480.0, signal_rsi=30.0)
+        txt = format_leaps_entry(rec, _make_qqq(), _FakeConfig())
+        self.assertIn("365 天", txt)                      # 期限退回默认
+        self.assertIn("张数：按资金额度自行决定", txt)
+
+    def test_3g_entry_notification_with_suggestion(self):
+        """有建议字段时, 提醒里应出现行权价 / 权利金 / 张数与额度占用。"""
+        from types import SimpleNamespace
+
+        from app.notification.wechat import format_leaps_entry
+
+        rec = SimpleNamespace(suggested_delta=0.70, suggested_tenor_days=365,
+                              suggested_strike=710.0, suggested_premium=100.81,
+                              suggested_quantity=9, suggested_expiry="2027-10-15",
+                              signal_base_price=751.27, signal_rsi=30.0)
+        txt = format_leaps_entry(rec, _make_qqq(), _FakeConfig())
+        self.assertIn("行权价：≈ 710", txt)
+        self.assertIn("权利金：≈ $100.81", txt)
+        self.assertIn("张数：9 张", txt)
+        self.assertIn("占用 91%", txt)
+
     def test_3b_option_math_delta_roundtrip(self):
         """按目标 delta 反解的行权价, 实际 delta 应回到目标值 (±0.01)。"""
         import math

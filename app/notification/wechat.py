@@ -109,6 +109,11 @@ def _suggest_contract_lines(position: Any, config: Any = None) -> list:
     """建议合约区块 (Delta / 期限 / 行权价 / 张数; 张数由资金额度换算)。"""
     delta = _get(position, "suggested_delta", DEFAULT_TARGET_DELTA)
     tenor = _get(position, "suggested_tenor_days", DEFAULT_TARGET_TENOR_DAYS)
+    # 历史/异常记录该列可能为 NULL -> 退回默认期限, 提醒绝不能因缺字段崩溃
+    try:
+        tenor = int(tenor) if tenor else int(DEFAULT_TARGET_TENOR_DAYS)
+    except (TypeError, ValueError):
+        tenor = int(DEFAULT_TARGET_TENOR_DAYS)
     strike = _get(position, "suggested_strike", None)
     premium = _get(position, "suggested_premium", None)
     qty = _get(position, "suggested_quantity", None)
@@ -174,7 +179,7 @@ def _exit_rules_lines(tp_rsi: Any, ts_days: Any, dte_force: Any) -> list:
 
 def format_leaps_entry(position: Any, qqq_data: Dict[str, Any], config: Any,
                        now: Optional[datetime] = None) -> str:
-    """🚨 LEAPS 入场信号 (三条件全部满足, 已创建 WAITING 建议)"""
+    """🚨 LEAPS 入场信号 (RSI + 52 周趋势两条件满足, 已创建 WAITING 建议)"""
     qqq_data = qqq_data or {}
     entry_rsi = config.get_entry_rsi_threshold() if config else DEFAULT_ENTRY_RSI
 
